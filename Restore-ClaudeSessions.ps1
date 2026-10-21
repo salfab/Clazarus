@@ -44,9 +44,11 @@ if (-not $NoUpdate -and (Test-Path $versionFile)) {
 
 $claudeDir   = Join-Path $env:USERPROFILE '.claude'
 $registryDir = Join-Path $claudeDir 'sessions'
-# The CIM query takes about a second: run it in the background so the banner shows at once
-$bootQuery = [powershell]::Create().AddScript({ (Get-CimInstance Win32_OperatingSystem).LastBootUpTime })
-$bootHandle = $bootQuery.BeginInvoke()
+# Boot time from the millisecond tick count, instantly (WMI takes over a second for the same value).
+# The 32-bit count wraps every 49.7 days; Clazarus runs right after a reboot, far from that.
+$uptimeMs = [long][Environment]::TickCount
+if ($uptimeMs -lt 0) { $uptimeMs += 4294967296 }
+$boot = (Get-Date).AddMilliseconds(-$uptimeMs)
 
 # ---------------------------------------------------------------- Styling
 # 24-bit ANSI colors; stripped when the console cannot render escape sequences
@@ -287,9 +289,6 @@ $sessions = foreach ($f in $files) {
     }
 }
 $sessions = @($sessions | Sort-Object LastActivity -Descending)
-
-$boot = @($bootQuery.EndInvoke($bootHandle))[0]
-$bootQuery.Dispose()
 
 # Reference = the most recent closed session from before boot (else the most recent closed one):
 # a session opened then closed again after the reboot does not shift the group

@@ -3,8 +3,8 @@
 *Claude + Lazarus.* Brings your Claude Code sessions back after a Windows reboot.
 
 > **Windows only.** Clazarus reopens your sessions as tabs with Windows Terminal (`wt.exe`), which
-> only exists on Windows. The rest is Windows-specific too (boot time from WMI, the user `PATH` in
-> the registry). macOS and Linux are not supported.
+> only exists on Windows. The installer is Windows-specific too (the user `PATH` lives in the
+> registry). macOS and Linux are not supported.
 
 You had a handful of `claude` sessions running in terminal tabs, Windows restarted, and they are
 gone. Clazarus lists your recent sessions, pre-selects the ones that were running before the
