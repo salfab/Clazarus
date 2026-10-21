@@ -2,6 +2,10 @@
 
 *Claude + Lazarus.* Brings your Claude Code sessions back after a Windows reboot.
 
+> **Windows only.** Clazarus is a PowerShell script built on Windows-specific pieces (boot time
+> from WMI, Windows Terminal tabs, the user `PATH` in the registry). macOS and Linux are not
+> supported.
+
 You had a handful of `claude` sessions running in terminal tabs, Windows restarted, and they are
 gone. Clazarus lists your recent sessions, pre-selects the ones that were running before the
 reboot, and reopens the ones you pick as tabs of a single Windows Terminal window, each in its
@@ -78,7 +82,8 @@ Options:
 
 ## Requirements
 
-- Windows, Windows PowerShell 5.1 or PowerShell 7
+- Windows 10 or 11 (no macOS or Linux support)
+- Windows PowerShell 5.1 (built into Windows) or PowerShell 7
 - [Claude Code](https://claude.com/claude-code) CLI (`claude`) on the `PATH`
 - [Windows Terminal](https://aka.ms/terminal) (optional, for tabs)
 
