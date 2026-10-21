@@ -8,16 +8,29 @@ reboot, and reopens the ones you pick as tabs of a single Windows Terminal windo
 own folder with `claude --resume` and Remote Control enabled.
 
 ```
-Last boot: 21.10.2026 11:05
-Pre-selected: sessions active between 21.10 02:03 and 21.10 07:03 (5 h window)
+   ██████╗██╗      █████╗ ███████╗ █████╗ ██████╗ ██╗   ██╗███████╗
+  ██╔════╝██║     ██╔══██╗╚══███╔╝██╔══██╗██╔══██╗██║   ██║██╔════╝
+  ██║     ██║     ███████║  ███╔╝ ███████║██████╔╝██║   ██║███████╗
+  ██║     ██║     ██╔══██║ ███╔╝  ██╔══██║██╔══██╗██║   ██║╚════██║
+  ╚██████╗███████╗██║  ██║███████╗██║  ██║██║  ██║╚██████╔╝███████║
+   ╚═════╝╚══════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝
+                rise and resume  ·  Claude Code session resurrector
 
-Arrows: move   Space: toggle   A: all/none   Enter: resurrect   Esc: quit
-  1 live 21.10 16:31  api-refactor                C:\src\api
-  2 [x]  21.10 07:03  Fix login redirect          C:\src\web
-  3 [x]  21.10 06:40  docs-cleanup                C:\src\docs
-  4 [ ]  20.10 18:12  Spike: new cache layer      C:\src\cache
-    2 selected
+  last boot  21.10.2026 11:05
+  window     21.10 02:03 → 21.10 07:03  (5 h before the last session, pre-selected)
+
+     LAST ACTIVE  SESSION                     FOLDER
+──────────────────────────────────────────────────────────────────────
+  ■  21.10 16:31  api-refactor                C:\src\api
+► ●  21.10 07:03  Fix login redirect          C:\src\web
+  ●  21.10 06:40  docs-cleanup                C:\src\docs
+  ○  20.10 18:12  Spike: new cache layer      C:\src\cache
+──────────────────────────────────────────────────────────────────────
+  ↑↓ move   space toggle   a all/none   enter resurrect   esc quit
 ```
+
+In the terminal the banner is a coral-to-gold gradient: `●` pre-selected, `○` not selected,
+`■` already running.
 
 ## Install
 

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Clazarus: resurrects Claude Code sessions interrupted by a reboot.
 
@@ -30,6 +30,65 @@ $claudeDir   = Join-Path $env:USERPROFILE '.claude'
 $registryDir = Join-Path $claudeDir 'sessions'
 $boot        = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
 
+# ---------------------------------------------------------------- Styling
+# 24-bit ANSI colors; stripped when the console cannot render escape sequences
+$vt = $(try { [bool]$Host.UI.SupportsVirtualTerminal } catch { $false }) -and -not [Console]::IsOutputRedirected
+$esc = [char]27
+$reset = "$esc[0m"
+$palette = @{
+    from     = 217, 119, 87    # Claude coral, start of the banner gradient
+    to       = 246, 200, 122   # warm gold, end of the gradient
+    accent   = 230, 140, 95
+    text     = 235, 235, 240
+    soft     = 175, 175, 185
+    dim      = 110, 110, 122
+    time     = 120, 180, 200
+    live     = 110, 190, 130
+    cursorBg = 44, 44, 58
+}
+
+function Fg([int[]]$rgb) { "$esc[38;2;$($rgb[0]);$($rgb[1]);$($rgb[2])m" }
+function Bg([int[]]$rgb) { "$esc[48;2;$($rgb[0]);$($rgb[1]);$($rgb[2])m" }
+function Paint($text, [int[]]$rgb) { "$(Fg $rgb)$text$reset" }
+
+function Write-Ansi([string]$text, [switch]$NoNewline) {
+    if (-not $vt) { $text = $text -replace "$esc\[[0-9;]*m", '' }
+    Write-Host $text -NoNewline:$NoNewline
+}
+
+# "ANSI Shadow" letters, 6 rows each
+$glyphs = @{
+    C = @(' ██████╗', '██╔════╝', '██║     ', '██║     ', '╚██████╗', ' ╚═════╝')
+    L = @('██╗     ', '██║     ', '██║     ', '██║     ', '███████╗', '╚══════╝')
+    A = @(' █████╗ ', '██╔══██╗', '███████║', '██╔══██║', '██║  ██║', '╚═╝  ╚═╝')
+    Z = @('███████╗', '╚══███╔╝', '  ███╔╝ ', ' ███╔╝  ', '███████╗', '╚══════╝')
+    R = @('██████╗ ', '██╔══██╗', '██████╔╝', '██╔══██╗', '██║  ██║', '╚═╝  ╚═╝')
+    U = @('██╗   ██╗', '██║   ██║', '██║   ██║', '██║   ██║', '╚██████╔╝', ' ╚═════╝ ')
+    S = @('███████╗', '██╔════╝', '███████╗', '╚════██║', '███████║', '╚══════╝')
+}
+
+function Write-Banner {
+    $rows = for ($r = 0; $r -lt 6; $r++) { -join ('CLAZARUS'.ToCharArray() | ForEach-Object { $glyphs[[string]$_][$r] }) }
+    $len = $rows[0].Length
+    $from = $palette.from; $to = $palette.to
+    foreach ($row in $rows) {
+        $sb = New-Object System.Text.StringBuilder '  '
+        for ($i = 0; $i -lt $row.Length; $i++) {
+            $ch = $row[$i]
+            if ($ch -eq ' ') { [void]$sb.Append(' '); continue }
+            # Horizontal gradient; the box-drawing "shadow" is a darker shade of the same color
+            $t = $i / ($len - 1)
+            $k = if ($ch -eq [char]0x2588) { 1.0 } else { 0.45 }
+            $rgb = @(0, 1, 2 | ForEach-Object { [int](($from[$_] + ($to[$_] - $from[$_]) * $t) * $k) })
+            [void]$sb.Append((Fg $rgb)).Append($ch)
+        }
+        Write-Ansi ($sb.ToString() + $reset)
+    }
+    $tagline = 'rise and resume  ·  Claude Code session resurrector'
+    Write-Ansi ((' ' * [math]::Max(2, $len + 2 - $tagline.Length)) + (Paint $tagline $palette.dim))
+}
+
+# ---------------------------------------------------------------- Sessions
 # Sessions whose claude process is still running (registry ~/.claude/sessions/<pid>.json)
 function Get-LiveSessions {
     if (-not (Test-Path $registryDir)) { return }
@@ -44,31 +103,55 @@ function Get-LiveSessions {
     }
 }
 
-function Cut($text, $n) { if ($text.Length -le $n) { $text } else { $text.Substring(0, $n - 1) + '~' } }
-
-# Title column: at most 40 characters, half of the remaining space on a narrow console
-$consoleWidth = try { [Console]::WindowWidth } catch { 160 }
-$titleWidth = [math]::Max(12, [math]::Min(40, [int](($consoleWidth - 23) / 2)))
-
-function Format-Row($s, [bool]$isChecked, $num) {
-    $box = if ($s.Live) { 'live' } elseif ($isChecked) { '[x] ' } else { '[ ] ' }
-    "{0,3} {1} {2:dd.MM HH:mm}  {3} {4}" -f $num, $box, $s.LastActivity, (Cut $s.Title $titleWidth).PadRight($titleWidth), $s.Directory
+function Cut($text, $n) {
+    if ($n -le 0) { '' } elseif ($text.Length -le $n) { $text } else { $text.Substring(0, $n - 1) + '~' }
 }
 
-function Get-RowColor($s) {
-    if ($s.Live) { 'DarkGray' } elseif ($s.InGroup) { 'White' } else { 'Gray' }
+$consoleWidth  = try { [Console]::WindowWidth } catch { 160 }
+$consoleHeight = try { [Console]::WindowHeight } catch { 40 }
+$rowWidth = $consoleWidth - 1
+# Title column: at most 40 characters, half of the remaining space on a narrow console
+$titleWidth = [math]::Max(12, [math]::Min(40, [int](($consoleWidth - 23) / 2)))
+
+# Row layout: pointer, mark, time, title, folder
+function Format-Row($s, [bool]$isChecked, [bool]$isCursor) {
+    if ($s.Live)         { $mark = '■'; $markColor = $palette.live }
+    elseif ($isChecked)  { $mark = '●'; $markColor = $palette.accent }
+    else                 { $mark = '○'; $markColor = $palette.dim }
+    $titleColor = if ($s.Live) { $palette.dim } elseif ($s.InGroup) { $palette.text } else { $palette.soft }
+    $pointer = if ($isCursor) { '►' } else { ' ' }
+    $bg = if ($isCursor) { Bg $palette.cursorBg } else { '' }
+    $dirWidth = $rowWidth - 19 - $titleWidth
+    $title = (Cut $s.Title $titleWidth).PadRight($titleWidth)
+    $dir = (Cut $s.Directory $dirWidth).PadRight([math]::Max(0, $dirWidth))
+    # No reset inside the row, so the cursor background spans the whole line
+    "$bg$(Fg $palette.accent)$pointer $(Fg $markColor)$mark  $(Fg $palette.time)$('{0:dd.MM HH:mm}' -f $s.LastActivity)  " +
+        "$(Fg $titleColor)$title $(Fg $palette.dim)$dir$reset"
+}
+
+function Write-ColumnHeader {
+    $header = '     ' + 'LAST ACTIVE'.PadRight(13) + 'SESSION'.PadRight($titleWidth + 1) + 'FOLDER'
+    Write-Ansi (Paint $header $palette.dim)
+    Write-Ansi (Paint ('─' * $rowWidth) $palette.dim)
+}
+
+function Format-Footer($count, $top, $view, $total) {
+    $hints = @(('↑↓', 'move'), ('space', 'toggle'), ('a', 'all/none'), ('enter', 'resurrect'), ('esc', 'quit'))
+    $plain = ($hints | ForEach-Object { "$($_[0]) $($_[1])" }) -join '   '
+    $colored = ($hints | ForEach-Object { "$(Paint $_[0] $palette.accent) $(Paint $_[1] $palette.dim)" }) -join '   '
+    $status = "$count selected"
+    if ($total -gt $view) { $status += "  ·  $($top + 1)-$($top + $view) of $total" }
+    $gap = $rowWidth - 2 - $plain.Length - $status.Length
+    if ($gap -lt 2) { return '  ' + $colored }
+    '  ' + $colored + (' ' * $gap) + (Paint $status $palette.text)
 }
 
 # Keyboard checklist; returns the indexes of the checked rows
-function Show-Picker($items, [bool[]]$checked) {
-    $width = [Console]::WindowWidth - 1
-    $view = [math]::Min($items.Count, [math]::Max(5, [Console]::WindowHeight - 6))
+function Show-Picker($items, [bool[]]$checked, [int]$view) {
     $cursor = 0; $top = 0
-
-    Write-Host 'Arrows: move   Space: toggle   A: all/none   Enter: resurrect   Esc: quit' -ForegroundColor DarkGray
     # Reserve the space first: if the console scrolls, the origin stays correct
-    for ($r = 0; $r -le $view; $r++) { Write-Host '' }
-    $origin = [Console]::CursorTop - ($view + 1)
+    for ($r = 0; $r -lt $view + 2; $r++) { Write-Host '' }
+    $origin = [Console]::CursorTop - ($view + 2)
     [Console]::CursorVisible = $false
     try {
         while ($true) {
@@ -77,14 +160,13 @@ function Show-Picker($items, [bool[]]$checked) {
             for ($r = 0; $r -lt $view; $r++) {
                 $i = $top + $r
                 [Console]::SetCursorPosition(0, $origin + $r)
-                $line = (Cut (Format-Row $items[$i] $checked[$i] ($i + 1)) $width).PadRight($width)
-                if ($i -eq $cursor) { Write-Host $line -NoNewline -ForegroundColor Black -BackgroundColor Gray }
-                else { Write-Host $line -NoNewline -ForegroundColor (Get-RowColor $items[$i]) }
+                Write-Ansi (Format-Row $items[$i] $checked[$i] ($i -eq $cursor)) -NoNewline
             }
             [Console]::SetCursorPosition(0, $origin + $view)
+            Write-Ansi (Paint ('─' * $rowWidth) $palette.dim) -NoNewline
+            [Console]::SetCursorPosition(0, $origin + $view + 1)
             $count = @($checked | Where-Object { $_ }).Count
-            $range = if ($items.Count -gt $view) { "   rows $($top + 1)-$($top + $view) of $($items.Count)" } else { '' }
-            Write-Host ("    {0} selected{1}" -f $count, $range).PadRight($width) -NoNewline -ForegroundColor DarkGray
+            Write-Ansi (Format-Footer $count $top $view $items.Count) -NoNewline
 
             $key = [Console]::ReadKey($true).Key.ToString()
             switch ($key) {
@@ -105,7 +187,7 @@ function Show-Picker($items, [bool[]]$checked) {
             }
         }
     } finally {
-        [Console]::SetCursorPosition(0, $origin + $view)
+        [Console]::SetCursorPosition(0, $origin + $view + 1)
         Write-Host ''
         [Console]::CursorVisible = $true
     }
@@ -154,7 +236,6 @@ $sessions = foreach ($f in $files) {
     }
 }
 $sessions = @($sessions | Sort-Object LastActivity -Descending)
-if (-not $sessions) { Write-Host "No sessions in the last $Days days."; return }
 
 # Reference = the most recent closed session from before boot (else the most recent closed one):
 # a session opened then closed again after the reboot does not shift the group
@@ -168,23 +249,39 @@ if ($reference) {
     }
 }
 
-Write-Host ("Last boot: {0:dd.MM.yyyy HH:mm}" -f $boot)
+# ---------------------------------------------------------------- Header
+# The full banner only when the console has room for it and for a useful list
+$bannerShown = $consoleWidth -ge 70 -and $consoleHeight -ge 24
+Write-Host ''
+if ($bannerShown) { Write-Banner }
+else { Write-Ansi ('  ' + (Paint 'CLAZARUS' $palette.accent) + '  ' + (Paint 'rise and resume' $palette.dim)) }
+Write-Host ''
+Write-Ansi ('  ' + (Paint 'last boot  ' $palette.dim) + (Paint ('{0:dd.MM.yyyy HH:mm}' -f $boot) $palette.text))
 if ($reference) {
-    Write-Host ("Pre-selected: sessions active between {0:dd.MM HH:mm} and {1:dd.MM HH:mm} ({2} h window)" -f `
-        $limit, $reference.LastActivity, $Hours)
+    Write-Ansi ('  ' + (Paint 'window     ' $palette.dim) +
+        (Paint ('{0:dd.MM HH:mm} → {1:dd.MM HH:mm}' -f $limit, $reference.LastActivity) $palette.text) +
+        (Paint ("  ($Hours h before the last session, pre-selected)") $palette.dim))
 }
 Write-Host ''
 
+if (-not $sessions) { Write-Ansi ('  ' + (Paint "No sessions in the last $Days days." $palette.soft)); return }
+
+Write-ColumnHeader
 if ($ListOnly -or [Console]::IsInputRedirected) {
-    for ($i = 0; $i -lt $sessions.Count; $i++) {
-        Write-Host (Format-Row $sessions[$i] $sessions[$i].InGroup ($i + 1)) -ForegroundColor (Get-RowColor $sessions[$i])
-    }
+    foreach ($s in $sessions) { Write-Ansi (Format-Row $s $s.InGroup $false) }
+    Write-Ansi (Paint ('─' * $rowWidth) $palette.dim)
+    Write-Ansi ('  ' + (Paint '●' $palette.accent) + (Paint ' pre-selected   ' $palette.dim) +
+        (Paint '○' $palette.dim) + (Paint ' not selected   ' $palette.dim) +
+        (Paint '■' $palette.live) + (Paint ' already running' $palette.dim))
     return
 }
 
+$headerLines = if ($bannerShown) { 14 } else { 8 }
+$view = [math]::Min($sessions.Count, [math]::Max(5, $consoleHeight - $headerLines - 3))
 $checked = [bool[]]@($sessions | ForEach-Object { $_.InGroup })
-$chosen = @(Show-Picker $sessions $checked | ForEach-Object { $sessions[$_] })
-if (-not $chosen) { Write-Host 'Nothing to resurrect.'; return }
+$chosen = @(Show-Picker $sessions $checked $view | ForEach-Object { $sessions[$_] })
+Write-Host ''
+if (-not $chosen) { Write-Ansi ('  ' + (Paint 'Nothing to resurrect.' $palette.soft)); return }
 
 # ---------------------------------------------------------------- Resurrect
 $chosen = @($chosen | Where-Object {
@@ -208,4 +305,7 @@ if (Get-Command wt.exe -ErrorAction SilentlyContinue) {
         Start-Process powershell.exe -WorkingDirectory $s.Directory -ArgumentList '-NoExit', '-Command', "claude --resume $($s.SessionId) --remote-control '$rcName'"
     }
 }
-$chosen | ForEach-Object { Write-Host "Resurrected: $($_.Title)" }
+Write-Ansi ('  ' + (Paint "Resurrecting $($chosen.Count) session(s)" $palette.accent))
+foreach ($s in $chosen) {
+    Write-Ansi ('  ' + (Paint '► ' $palette.accent) + (Paint $s.Title $palette.text) + '  ' + (Paint $s.Directory $palette.dim))
+}
