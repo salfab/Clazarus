@@ -153,6 +153,14 @@ function Format-Row($s, [bool]$isChecked, [bool]$isCursor) {
         "$(Fg $titleColor)$title $(Fg $palette.dim)$dir$reset"
 }
 
+# Second line of a row: the session summary, under the title column
+function Format-Summary($s, [bool]$isCursor) {
+    $bg = if ($isCursor) { Bg $palette.cursorBg } else { '' }
+    $textWidth = [math]::Max(0, $rowWidth - 18)
+    $text = if ($s.Summary) { Cut $s.Summary $textWidth } else { '' }
+    "$bg$(' ' * 18)$(Fg $palette.dim)$($text.PadRight($textWidth))$reset"
+}
+
 function Write-ColumnHeader {
     $header = '     ' + 'LAST ACTIVE'.PadRight(13) + 'SESSION'.PadRight($titleWidth + 1) + 'FOLDER'
     Write-Ansi (Paint $header $palette.dim)
@@ -176,12 +184,13 @@ function Format-Footer($count, $top, $view, $total) {
     '  ' + $colored + (' ' * $gap) + (Paint $status $palette.selected)
 }
 
-# Keyboard checklist; returns the indexes of the checked rows
+# Keyboard checklist, two console lines per session; returns the indexes of the checked rows
 function Show-Picker($items, [bool[]]$checked, [int]$view) {
     $cursor = 0; $top = 0
+    $listLines = $view * 2
     # Reserve the space first: if the console scrolls, the origin stays correct
-    for ($r = 0; $r -lt $view + 2; $r++) { Write-Host '' }
-    $origin = [Console]::CursorTop - ($view + 2)
+    for ($r = 0; $r -lt $listLines + 2; $r++) { Write-Host '' }
+    $origin = [Console]::CursorTop - ($listLines + 2)
     [Console]::CursorVisible = $false
     try {
         while ($true) {
@@ -189,12 +198,14 @@ function Show-Picker($items, [bool[]]$checked, [int]$view) {
             if ($cursor -ge $top + $view) { $top = $cursor - $view + 1 }
             for ($r = 0; $r -lt $view; $r++) {
                 $i = $top + $r
-                [Console]::SetCursorPosition(0, $origin + $r)
+                [Console]::SetCursorPosition(0, $origin + 2 * $r)
                 Write-Ansi (Format-Row $items[$i] $checked[$i] ($i -eq $cursor)) -NoNewline
+                [Console]::SetCursorPosition(0, $origin + 2 * $r + 1)
+                Write-Ansi (Format-Summary $items[$i] ($i -eq $cursor)) -NoNewline
             }
-            [Console]::SetCursorPosition(0, $origin + $view)
+            [Console]::SetCursorPosition(0, $origin + $listLines)
             Write-Ansi (Paint ('─' * $rowWidth) $palette.dim) -NoNewline
-            [Console]::SetCursorPosition(0, $origin + $view + 1)
+            [Console]::SetCursorPosition(0, $origin + $listLines + 1)
             $count = @($checked | Where-Object { $_ }).Count
             Write-Ansi (Format-Footer $count $top $view $items.Count) -NoNewline
 
@@ -217,7 +228,7 @@ function Show-Picker($items, [bool[]]$checked, [int]$view) {
             }
         }
     } finally {
-        [Console]::SetCursorPosition(0, $origin + $view + 1)
+        [Console]::SetCursorPosition(0, $origin + $listLines + 1)
         Write-Host ''
         [Console]::CursorVisible = $true
     }
@@ -266,25 +277,41 @@ $sessions = foreach ($f in $files) {
     if (-not $cwd) { continue }
     if (-not $IncludeDesktop -and $entry -and $entry -ne 'cli') { continue }
 
-    # Title: the registry name if the session is running, else the last /rename (custom-title),
-    # else the generated title (ai-title)
-    $title = if ($live.ContainsKey($f.BaseName)) { $live[$f.BaseName].name }
-    if (-not $title) {
-        $titles = Select-String -Path $f.FullName -Pattern '"type":"(custom-title|ai-title)"' -Encoding UTF8
-        $custom = $titles | Where-Object { $_.Line -match '"custom-title"' } | Select-Object -Last 1
-        $pickLine = if ($custom) { $custom } else { $titles | Select-Object -Last 1 }
+    # A running session only shows on the "running" line: its registry name is all it needs
+    $isLive = $live.ContainsKey($f.BaseName)
+    $title = if ($isLive) { $live[$f.BaseName].name }
+    $summary = $null
+    if (-not $isLive) {
+        # One pass over the transcript for the title and the summary
+        $hits = Select-String -Path $f.FullName -Encoding UTF8 `
+            -Pattern '"type":"(custom-title|ai-title)"', '"subtype":"away_summary"', '^\{"type":"last-prompt"'
+
+        # Title: the last /rename (custom-title), else the generated title (ai-title)
+        $custom = $hits | Where-Object { $_.Line -match '"type":"custom-title"' } | Select-Object -Last 1
+        $pickLine = if ($custom) { $custom } else { $hits | Where-Object { $_.Line -match '"type":"ai-title"' } | Select-Object -Last 1 }
         if ($pickLine) {
             $t = $pickLine.Line | ConvertFrom-Json
             $title = if ($t.customTitle) { $t.customTitle } else { $t.aiTitle }
         }
+
+        # Summary: Claude's last "while you were away" recap, else the last prompt, quoted
+        $away = $hits | Where-Object { $_.Line -match '"subtype":"away_summary"' } | Select-Object -Last 1
+        $prompt = $hits | Where-Object { $_.Line -match '^\{"type":"last-prompt"' } | Select-Object -Last 1
+        if ($away) {
+            $summary = ($away.Line | ConvertFrom-Json).content -replace '\s*\(disable recaps in /config\)\s*$', ''
+        } elseif ($prompt) {
+            $summary = '"' + ($prompt.Line | ConvertFrom-Json).lastPrompt + '"'
+        }
+        if ($summary) { $summary = ($summary -replace '\s+', ' ').Trim() }
     }
 
     [pscustomobject]@{
         LastActivity = $f.LastWriteTime
         Title        = if ($title) { $title } else { '(untitled)' }
+        Summary      = $summary
         Directory    = $cwd
         SessionId    = $f.BaseName
-        Live         = $live.ContainsKey($f.BaseName)
+        Live         = $isLive
         InGroup      = $false
     }
 }
@@ -370,7 +397,10 @@ if (-not $sessions) {
 
 Write-ColumnHeader
 if ($ListOnly -or [Console]::IsInputRedirected) {
-    foreach ($s in $sessions) { Write-Ansi (Format-Row $s $s.InGroup $false) }
+    foreach ($s in $sessions) {
+        Write-Ansi (Format-Row $s $s.InGroup $false)
+        Write-Ansi (Format-Summary $s $false)
+    }
     Write-Ansi (Paint ('─' * $rowWidth) $palette.dim)
     Write-Ansi ('  ' + (Paint '●' $palette.selected) + (Paint ' pre-selected   ' $palette.dim) +
         (Paint '○' $palette.dim) + (Paint ' not selected' $palette.dim))
@@ -378,7 +408,8 @@ if ($ListOnly -or [Console]::IsInputRedirected) {
 }
 
 $headerLines = $(if ($bannerShown) { 14 } else { 8 }) + $runningLines
-$view = [math]::Min($sessions.Count, [math]::Max(5, $consoleHeight - $headerLines - 3))
+# Sessions that fit, at two lines each
+$view = [math]::Min($sessions.Count, [math]::Max(3, [math]::Floor(($consoleHeight - $headerLines - 3) / 2)))
 $checked = [bool[]]@($sessions | ForEach-Object { $_.InGroup })
 $chosen = @(Show-Picker $sessions $checked $view | ForEach-Object { $sessions[$_] })
 Write-Host ''

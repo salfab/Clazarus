@@ -13,7 +13,9 @@ own folder with `claude --resume` and Remote Control enabled.
 
 ![Clazarus picker in Windows Terminal](docs/screenshot.png)
 
-Selected sessions get a green `●` and the cursor row is highlighted. Sessions that are already
+Under each session is a one-line summary: Claude's last "while you were away" recap, or your last
+prompt, in quotes, when there is no recap. Selected sessions get a green `●` and the cursor row is
+highlighted. Sessions that are already
 running are not choices: they are only named on the `running` line.
 
 ## Install
