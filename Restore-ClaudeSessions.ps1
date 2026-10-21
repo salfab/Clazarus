@@ -44,7 +44,9 @@ if (-not $NoUpdate -and (Test-Path $versionFile)) {
 
 $claudeDir   = Join-Path $env:USERPROFILE '.claude'
 $registryDir = Join-Path $claudeDir 'sessions'
-$boot        = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+# The CIM query takes about a second: run it in the background so the banner shows at once
+$bootQuery = [powershell]::Create().AddScript({ (Get-CimInstance Win32_OperatingSystem).LastBootUpTime })
+$bootHandle = $bootQuery.BeginInvoke()
 
 # ---------------------------------------------------------------- Styling
 # 24-bit ANSI colors; stripped when the console cannot render escape sequences
@@ -85,22 +87,27 @@ $glyphs = @{
 }
 
 function Write-Banner {
-    $rows = for ($r = 0; $r -lt 6; $r++) { -join ('CLAZARUS'.ToCharArray() | ForEach-Object { $glyphs[[string]$_][$r] }) }
+    $rows = for ($r = 0; $r -lt 6; $r++) { -join $(foreach ($letter in 'CLAZARUS'.ToCharArray()) { $glyphs[[string]$letter][$r] }) }
     $len = $rows[0].Length
     $from = $palette.from; $to = $palette.to
+    # Plain arithmetic in the loop: a pipeline per character costs a visible third of a second
+    $out = New-Object System.Text.StringBuilder
     foreach ($row in $rows) {
-        $sb = New-Object System.Text.StringBuilder '  '
+        [void]$out.Append('  ')
         for ($i = 0; $i -lt $row.Length; $i++) {
             $ch = $row[$i]
-            if ($ch -eq ' ') { [void]$sb.Append(' '); continue }
+            if ($ch -eq ' ') { [void]$out.Append(' '); continue }
             # Horizontal gradient; the box-drawing "shadow" is a darker shade of the same color
             $t = $i / ($len - 1)
             $k = if ($ch -eq [char]0x2588) { 1.0 } else { 0.45 }
-            $rgb = @(0, 1, 2 | ForEach-Object { [int](($from[$_] + ($to[$_] - $from[$_]) * $t) * $k) })
-            [void]$sb.Append((Fg $rgb)).Append($ch)
+            $red   = [int](($from[0] + ($to[0] - $from[0]) * $t) * $k)
+            $green = [int](($from[1] + ($to[1] - $from[1]) * $t) * $k)
+            $blue  = [int](($from[2] + ($to[2] - $from[2]) * $t) * $k)
+            [void]$out.Append("$esc[38;2;$red;$green;${blue}m").Append($ch)
         }
-        Write-Ansi ($sb.ToString() + $reset)
+        [void]$out.Append($reset).Append("`n")
     }
+    Write-Ansi $out.ToString().TrimEnd("`n")
     $tagline = 'rise and resume  ·  Claude Code session resurrector'
     Write-Ansi ((' ' * [math]::Max(2, $len + 2 - $tagline.Length)) + (Paint $tagline $palette.dim))
 }
@@ -280,6 +287,9 @@ $sessions = foreach ($f in $files) {
     }
 }
 $sessions = @($sessions | Sort-Object LastActivity -Descending)
+
+$boot = @($bootQuery.EndInvoke($bootHandle))[0]
+$bootQuery.Dispose()
 
 # Reference = the most recent closed session from before boot (else the most recent closed one):
 # a session opened then closed again after the reboot does not shift the group
