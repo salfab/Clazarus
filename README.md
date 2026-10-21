@@ -19,11 +19,29 @@ Arrows: move   Space: toggle   A: all/none   Enter: resurrect   Esc: quit
     2 selected
 ```
 
+## Install
+
+```powershell
+irm https://raw.githubusercontent.com/salfab/Clazarus/main/install.ps1 | iex
+```
+
+Or from a clone:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+This copies the script to `%LOCALAPPDATA%\Programs\Clazarus`, adds a `clazarus` command there and
+puts that folder on your user `PATH`. Run it again to update; `-Uninstall` removes it.
+Terminals opened before the install need a restart to find the command.
+
 ## Usage
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\Restore-ClaudeSessions.ps1
+clazarus
 ```
+
+Without installing: `powershell -ExecutionPolicy Bypass -File .\Restore-ClaudeSessions.ps1`.
 
 | Key | Action |
 | --- | --- |
