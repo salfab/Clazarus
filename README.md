@@ -25,8 +25,12 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 This copies the script to `%LOCALAPPDATA%\Programs\Clazarus`, adds a `clazarus` command there and
-puts that folder on your user `PATH`. Run it again to update; `-Uninstall` removes it.
-Terminals opened before the install need a restart to find the command.
+puts that folder on your user `PATH`; `-Uninstall` removes it. Terminals opened before the
+install need a restart to find the command.
+
+**Updates are automatic.** On every start, the installed copy compares the commit it was installed
+from with the head of `main` on GitHub. When `main` has moved, it downloads the new script and runs
+that one. Offline, it runs the installed version. `clazarus -NoUpdate` skips the check.
 
 ## Usage
 
@@ -52,6 +56,7 @@ Options:
 | `-Days` | `30` | Only list sessions active in the last N days |
 | `-IncludeDesktop` | off | Also list Claude desktop app sessions (they already stay in the app's sidebar) |
 | `-ListOnly` | off | Print the list without the interactive picker |
+| `-NoUpdate` | off | Skip the update check of the installed copy |
 
 ## How it works
 

@@ -6,7 +6,7 @@
     Copies Restore-ClaudeSessions.ps1 to -InstallDir, writes a clazarus.cmd shim next to it and
     adds that folder to the user PATH. The shim works from PowerShell, cmd and Windows Terminal.
     Run from a clone, it installs the local script; run through "irm ... | iex", it downloads it
-    from GitHub. Run it again to update.
+    from GitHub. The installed copy then updates itself whenever GitHub's main branch moves.
 
 .EXAMPLE
     .\install.ps1
@@ -20,7 +20,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $scriptName = 'Restore-ClaudeSessions.ps1'
-$sourceUrl  = "https://raw.githubusercontent.com/salfab/Clazarus/main/$scriptName"
+$repo       = 'salfab/Clazarus'
 
 # Read the raw user PATH so %VARIABLES% stay unexpanded when it is written back
 $envKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
@@ -55,9 +55,16 @@ $target = Join-Path $InstallDir $scriptName
 $local = if ($PSScriptRoot) { Join-Path $PSScriptRoot $scriptName }
 if ($local -and (Test-Path $local)) {
     Copy-Item $local $target -Force
+    # The clone's commit; without git, "local" makes the first run update from GitHub
+    $version = try { git -C $PSScriptRoot rev-parse HEAD 2>$null } catch { $null }
+    if (-not $version) { $version = 'local' }
 } else {
-    Invoke-WebRequest $sourceUrl -OutFile $target -UseBasicParsing
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $version = (Invoke-RestMethod "https://api.github.com/repos/$repo/commits/main" -UseBasicParsing).sha
+    Invoke-WebRequest "https://raw.githubusercontent.com/$repo/$version/$scriptName" -OutFile $target -UseBasicParsing
 }
+# The installed copy compares this with GitHub's main on every start and updates itself
+Set-Content (Join-Path $InstallDir 'version') $version -Encoding ASCII
 
 # Shim: forwards every argument, e.g. "clazarus -Hours 3"
 Set-Content (Join-Path $InstallDir 'clazarus.cmd') -Encoding ASCII -Value @"

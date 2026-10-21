@@ -23,8 +23,24 @@ param(
     # Also include desktop app sessions (they stay in the app's sidebar anyway)
     [switch]$IncludeDesktop,
     # Print the list without the interactive picker
-    [switch]$ListOnly
+    [switch]$ListOnly,
+    # Skip the update check of the installed copy
+    [switch]$NoUpdate
 )
+
+# ---------------------------------------------------------------- Self-update check
+# Only the installed copy (a "version" file next to it) follows GitHub's main branch.
+# GitHub is asked in the background while the sessions are collected, so the check costs no time.
+$versionFile = Join-Path $PSScriptRoot 'version'
+$updateCheck = $null
+if (-not $NoUpdate -and (Test-Path $versionFile)) {
+    $updateCheck = [powershell]::Create().AddScript({
+        $ProgressPreference = 'SilentlyContinue'
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        (Invoke-RestMethod 'https://api.github.com/repos/salfab/Clazarus/commits/main' -TimeoutSec 3 -UseBasicParsing).sha
+    })
+    $updateHandle = $updateCheck.BeginInvoke()
+}
 
 $claudeDir   = Join-Path $env:USERPROFILE '.claude'
 $registryDir = Join-Path $claudeDir 'sessions'
@@ -245,6 +261,31 @@ if ($reference) {
     $limit = $reference.LastActivity.AddHours(-$Hours)
     foreach ($s in $closed) {
         if ($s.LastActivity -le $reference.LastActivity -and $s.LastActivity -ge $limit) { $s.InGroup = $true }
+    }
+}
+
+# ---------------------------------------------------------------- Self-update
+if ($updateCheck) {
+    try {
+        $latest = if ($updateHandle.AsyncWaitHandle.WaitOne(3000)) { @($updateCheck.EndInvoke($updateHandle))[0] }
+        $current = (Get-Content $versionFile -Raw).Trim()
+        if ($latest -and $latest -ne $current) {
+            Write-Host "  Updating Clazarus to $($latest.Substring(0, 7))..." -ForegroundColor DarkGray
+            $ProgressPreference = 'SilentlyContinue'
+            # Pinned to the commit, so a stale raw.githubusercontent.com cache cannot serve an older file
+            $download = "$PSCommandPath.download"
+            Invoke-WebRequest "https://raw.githubusercontent.com/salfab/Clazarus/$latest/Restore-ClaudeSessions.ps1" `
+                -OutFile $download -UseBasicParsing -TimeoutSec 10
+            Move-Item $download $PSCommandPath -Force
+            Set-Content $versionFile $latest -Encoding ASCII
+            $PSBoundParameters['NoUpdate'] = $true
+            & $PSCommandPath @PSBoundParameters
+            return
+        }
+    } catch {
+        # Offline or GitHub unreachable: run the installed version as it is
+    } finally {
+        $updateCheck.Dispose()
     }
 }
 
