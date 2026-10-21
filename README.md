@@ -7,31 +7,10 @@ gone. Clazarus lists your recent sessions, pre-selects the ones that were runnin
 reboot, and reopens the ones you pick as tabs of a single Windows Terminal window, each in its
 own folder with `claude --resume` and Remote Control enabled.
 
-```
-   ██████╗██╗      █████╗ ███████╗ █████╗ ██████╗ ██╗   ██╗███████╗
-  ██╔════╝██║     ██╔══██╗╚══███╔╝██╔══██╗██╔══██╗██║   ██║██╔════╝
-  ██║     ██║     ███████║  ███╔╝ ███████║██████╔╝██║   ██║███████╗
-  ██║     ██║     ██╔══██║ ███╔╝  ██╔══██║██╔══██╗██║   ██║╚════██║
-  ╚██████╗███████╗██║  ██║███████╗██║  ██║██║  ██║╚██████╔╝███████║
-   ╚═════╝╚══════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝
-                rise and resume  ·  Claude Code session resurrector
+![Clazarus picker in Windows Terminal](docs/screenshot.png)
 
-  last boot  21.10.2026 11:05
-  window     21.10 02:03 → 21.10 07:03  (5 h before the last session, pre-selected)
-  running    api-refactor
-
-     LAST ACTIVE  SESSION                     FOLDER
-──────────────────────────────────────────────────────────────────────
-► ●  21.10 07:03  Fix login redirect          C:\src\web
-  ●  21.10 06:40  docs-cleanup                C:\src\docs
-  ○  20.10 18:12  Spike: new cache layer      C:\src\cache
-──────────────────────────────────────────────────────────────────────
-  ↑↓ move   space toggle   a all/none   enter resurrect   esc quit
-```
-
-In the terminal the banner is a coral-to-gold gradient, selected sessions get a green `●` and
-the cursor row is highlighted. Sessions that are already running are not choices: they are only
-named on the `running` line.
+Selected sessions get a green `●` and the cursor row is highlighted. Sessions that are already
+running are not choices: they are only named on the `running` line.
 
 ## Install
 
