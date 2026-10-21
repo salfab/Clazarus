@@ -199,12 +199,13 @@ if (Get-Command wt.exe -ErrorAction SilentlyContinue) {
     $tabs = foreach ($s in $chosen) {
         # wt reads ";" as a command separator, and the title is quoted
         $tabTitle = $s.Title -replace '"', "'" -replace ';', ','
-        "new-tab -d `"$($s.Directory)`" --title `"$tabTitle`" claude --resume $($s.SessionId)"
+        "new-tab -d `"$($s.Directory)`" --title `"$tabTitle`" claude --resume $($s.SessionId) --remote-control `"$tabTitle`""
     }
     Start-Process wt.exe -ArgumentList ("-w $window " + ($tabs -join ' ; '))
 } else {
     foreach ($s in $chosen) {
-        Start-Process powershell.exe -WorkingDirectory $s.Directory -ArgumentList '-NoExit', '-Command', "claude --resume $($s.SessionId)"
+        $rcName = $s.Title -replace "'", "''"
+        Start-Process powershell.exe -WorkingDirectory $s.Directory -ArgumentList '-NoExit', '-Command', "claude --resume $($s.SessionId) --remote-control '$rcName'"
     }
 }
 $chosen | ForEach-Object { Write-Host "Resurrected: $($_.Title)" }

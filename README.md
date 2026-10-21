@@ -5,7 +5,7 @@
 You had a handful of `claude` sessions running in terminal tabs, Windows restarted, and they are
 gone. Clazarus lists your recent sessions, pre-selects the ones that were running before the
 reboot, and reopens the ones you pick as tabs of a single Windows Terminal window, each in its
-own folder with `claude --resume`.
+own folder with `claude --resume` and Remote Control enabled.
 
 ```
 Last boot: 21.10.2026 11:05
@@ -56,6 +56,9 @@ Options:
 - **Resurrection**: one `wt.exe` call opens every selected session as a tab. Run from Windows
   Terminal, the tabs go into the current window; otherwise into a new one. Without Windows
   Terminal, each session opens in its own PowerShell window.
+- **Remote Control**: every resurrected session starts with `--remote-control "<title>"`, so it
+  shows up under its own name in the Claude app. Whether a session had Remote Control before the
+  reboot is not recorded anywhere that survives it, so it is enabled for all of them.
 
 ## Requirements
 
