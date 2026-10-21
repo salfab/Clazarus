@@ -38,13 +38,14 @@ $reset = "$esc[0m"
 $palette = @{
     from     = 217, 119, 87    # Claude coral, start of the banner gradient
     to       = 246, 200, 122   # warm gold, end of the gradient
-    accent   = 230, 140, 95
+    accent   = 230, 140, 95    # brand color, banner only
     text     = 235, 235, 240
-    soft     = 175, 175, 185
+    soft     = 160, 160, 172
     dim      = 110, 110, 122
     time     = 120, 180, 200
-    live     = 110, 190, 130
-    cursorBg = 44, 44, 58
+    selected = 110, 200, 140   # green: chosen, not a warning
+    cursor   = 140, 175, 255
+    cursorBg = 38, 46, 68
 }
 
 function Fg([int[]]$rgb) { "$esc[38;2;$($rgb[0]);$($rgb[1]);$($rgb[2])m" }
@@ -115,17 +116,15 @@ $titleWidth = [math]::Max(12, [math]::Min(40, [int](($consoleWidth - 23) / 2)))
 
 # Row layout: pointer, mark, time, title, folder
 function Format-Row($s, [bool]$isChecked, [bool]$isCursor) {
-    if ($s.Live)         { $mark = '■'; $markColor = $palette.live }
-    elseif ($isChecked)  { $mark = '●'; $markColor = $palette.accent }
-    else                 { $mark = '○'; $markColor = $palette.dim }
-    $titleColor = if ($s.Live) { $palette.dim } elseif ($s.InGroup) { $palette.text } else { $palette.soft }
+    if ($isChecked) { $mark = '●'; $markColor = $palette.selected; $titleColor = $palette.text }
+    else            { $mark = '○'; $markColor = $palette.dim;      $titleColor = $palette.soft }
     $pointer = if ($isCursor) { '►' } else { ' ' }
     $bg = if ($isCursor) { Bg $palette.cursorBg } else { '' }
     $dirWidth = $rowWidth - 19 - $titleWidth
     $title = (Cut $s.Title $titleWidth).PadRight($titleWidth)
     $dir = (Cut $s.Directory $dirWidth).PadRight([math]::Max(0, $dirWidth))
     # No reset inside the row, so the cursor background spans the whole line
-    "$bg$(Fg $palette.accent)$pointer $(Fg $markColor)$mark  $(Fg $palette.time)$('{0:dd.MM HH:mm}' -f $s.LastActivity)  " +
+    "$bg$(Fg $palette.cursor)$pointer $(Fg $markColor)$mark  $(Fg $palette.time)$('{0:dd.MM HH:mm}' -f $s.LastActivity)  " +
         "$(Fg $titleColor)$title $(Fg $palette.dim)$dir$reset"
 }
 
@@ -138,12 +137,12 @@ function Write-ColumnHeader {
 function Format-Footer($count, $top, $view, $total) {
     $hints = @(('↑↓', 'move'), ('space', 'toggle'), ('a', 'all/none'), ('enter', 'resurrect'), ('esc', 'quit'))
     $plain = ($hints | ForEach-Object { "$($_[0]) $($_[1])" }) -join '   '
-    $colored = ($hints | ForEach-Object { "$(Paint $_[0] $palette.accent) $(Paint $_[1] $palette.dim)" }) -join '   '
+    $colored = ($hints | ForEach-Object { "$(Paint $_[0] $palette.text) $(Paint $_[1] $palette.dim)" }) -join '   '
     $status = "$count selected"
     if ($total -gt $view) { $status += "  ·  $($top + 1)-$($top + $view) of $total" }
     $gap = $rowWidth - 2 - $plain.Length - $status.Length
     if ($gap -lt 2) { return '  ' + $colored }
-    '  ' + $colored + (' ' * $gap) + (Paint $status $palette.text)
+    '  ' + $colored + (' ' * $gap) + (Paint $status $palette.selected)
 }
 
 # Keyboard checklist; returns the indexes of the checked rows
@@ -176,10 +175,10 @@ function Show-Picker($items, [bool[]]$checked, [int]$view) {
                 'PageDown'  { $cursor = [math]::Min($items.Count - 1, $cursor + $view) }
                 'Home'      { $cursor = 0 }
                 'End'       { $cursor = $items.Count - 1 }
-                'Spacebar'  { if (-not $items[$cursor].Live) { $checked[$cursor] = -not $checked[$cursor] } }
+                'Spacebar'  { $checked[$cursor] = -not $checked[$cursor] }
                 'A' {
                     $value = -not ($checked -contains $true)
-                    for ($j = 0; $j -lt $items.Count; $j++) { if (-not $items[$j].Live) { $checked[$j] = $value } }
+                    for ($j = 0; $j -lt $items.Count; $j++) { $checked[$j] = $value }
                 }
                 'Enter'  { return @(for ($j = 0; $j -lt $items.Count; $j++) { if ($checked[$j]) { $j } }) }
                 'Escape' { return @() }
@@ -262,21 +261,42 @@ if ($reference) {
         (Paint ('{0:dd.MM HH:mm} → {1:dd.MM HH:mm}' -f $limit, $reference.LastActivity) $palette.text) +
         (Paint ("  ($Hours h before the last session, pre-selected)") $palette.dim))
 }
+
+# Running sessions are information, not choices: one dim line, wrapped, outside the list
+$running = @($sessions | Where-Object Live)
+$runningLines = 0
+if ($running) {
+    $label = 'running    '
+    $line = ''
+    foreach ($name in $running.Title) {
+        $candidate = if ($line) { "$line  ·  $name" } else { $name }
+        if ($line -and (2 + $label.Length + $candidate.Length) -gt $rowWidth) {
+            Write-Ansi ('  ' + (Paint $label $palette.dim) + (Paint $line $palette.dim))
+            $label = ' ' * $label.Length; $line = $name; $runningLines++
+        } else { $line = $candidate }
+    }
+    Write-Ansi ('  ' + (Paint $label $palette.dim) + (Paint $line $palette.dim))
+    $runningLines++
+}
 Write-Host ''
 
-if (-not $sessions) { Write-Ansi ('  ' + (Paint "No sessions in the last $Days days." $palette.soft)); return }
+$sessions = @($sessions | Where-Object { -not $_.Live })
+if (-not $sessions) {
+    $why = if ($running) { 'every recent session is already running.' } else { "no sessions in the last $Days days." }
+    Write-Ansi ('  ' + (Paint "Nothing to resurrect: $why" $palette.soft))
+    return
+}
 
 Write-ColumnHeader
 if ($ListOnly -or [Console]::IsInputRedirected) {
     foreach ($s in $sessions) { Write-Ansi (Format-Row $s $s.InGroup $false) }
     Write-Ansi (Paint ('─' * $rowWidth) $palette.dim)
-    Write-Ansi ('  ' + (Paint '●' $palette.accent) + (Paint ' pre-selected   ' $palette.dim) +
-        (Paint '○' $palette.dim) + (Paint ' not selected   ' $palette.dim) +
-        (Paint '■' $palette.live) + (Paint ' already running' $palette.dim))
+    Write-Ansi ('  ' + (Paint '●' $palette.selected) + (Paint ' pre-selected   ' $palette.dim) +
+        (Paint '○' $palette.dim) + (Paint ' not selected' $palette.dim))
     return
 }
 
-$headerLines = if ($bannerShown) { 14 } else { 8 }
+$headerLines = $(if ($bannerShown) { 14 } else { 8 }) + $runningLines
 $view = [math]::Min($sessions.Count, [math]::Max(5, $consoleHeight - $headerLines - 3))
 $checked = [bool[]]@($sessions | ForEach-Object { $_.InGroup })
 $chosen = @(Show-Picker $sessions $checked $view | ForEach-Object { $sessions[$_] })
@@ -305,7 +325,7 @@ if (Get-Command wt.exe -ErrorAction SilentlyContinue) {
         Start-Process powershell.exe -WorkingDirectory $s.Directory -ArgumentList '-NoExit', '-Command', "claude --resume $($s.SessionId) --remote-control '$rcName'"
     }
 }
-Write-Ansi ('  ' + (Paint "Resurrecting $($chosen.Count) session(s)" $palette.accent))
+Write-Ansi ('  ' + (Paint "Resurrecting $($chosen.Count) session(s)" $palette.text))
 foreach ($s in $chosen) {
-    Write-Ansi ('  ' + (Paint '► ' $palette.accent) + (Paint $s.Title $palette.text) + '  ' + (Paint $s.Directory $palette.dim))
+    Write-Ansi ('  ' + (Paint '► ' $palette.selected) + (Paint $s.Title $palette.text) + '  ' + (Paint $s.Directory $palette.dim))
 }

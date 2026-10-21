@@ -18,10 +18,10 @@ own folder with `claude --resume` and Remote Control enabled.
 
   last boot  21.10.2026 11:05
   window     21.10 02:03 → 21.10 07:03  (5 h before the last session, pre-selected)
+  running    api-refactor
 
      LAST ACTIVE  SESSION                     FOLDER
 ──────────────────────────────────────────────────────────────────────
-  ■  21.10 16:31  api-refactor                C:\src\api
 ► ●  21.10 07:03  Fix login redirect          C:\src\web
   ●  21.10 06:40  docs-cleanup                C:\src\docs
   ○  20.10 18:12  Spike: new cache layer      C:\src\cache
@@ -29,8 +29,9 @@ own folder with `claude --resume` and Remote Control enabled.
   ↑↓ move   space toggle   a all/none   enter resurrect   esc quit
 ```
 
-In the terminal the banner is a coral-to-gold gradient: `●` pre-selected, `○` not selected,
-`■` already running.
+In the terminal the banner is a coral-to-gold gradient, selected sessions get a green `●` and
+the cursor row is highlighted. Sessions that are already running are not choices: they are only
+named on the `running` line.
 
 ## Install
 
@@ -82,8 +83,8 @@ Options:
   Every session whose last activity falls within `-Hours` before it is pre-selected. This works
   however long the machine stayed off.
 - **Live sessions**: Claude Code keeps a registry of running sessions in `~/.claude/sessions/`.
-  Sessions still running are shown as `live`, cannot be selected, and are ignored when computing
-  the window, so a session you already reopened never shifts it.
+  Sessions still running are only listed on the `running` line, never offered, and are ignored
+  when computing the window, so a session you already reopened never shifts it.
 - **Resurrection**: one `wt.exe` call opens every selected session as a tab. Run from Windows
   Terminal, the tabs go into the current window; otherwise into a new one. Without Windows
   Terminal, each session opens in its own PowerShell window.
