@@ -154,6 +154,12 @@ function Format-Footer($count, $top, $view, $total) {
     $hints = @(('↑↓', 'move'), ('space', 'toggle'), ('a', 'all/none'), ('enter', 'resurrect'), ('esc', 'quit'))
     $plain = ($hints | ForEach-Object { "$($_[0]) $($_[1])" }) -join '   '
     $colored = ($hints | ForEach-Object { "$(Paint $_[0] $palette.text) $(Paint $_[1] $palette.dim)" }) -join '   '
+    # Narrow console: keys only, so the footer never wraps and breaks the redraw
+    if ($plain.Length + 2 -gt $rowWidth) {
+        $plain = ($hints | ForEach-Object { $_[0] }) -join '  '
+        $colored = ($hints | ForEach-Object { Paint $_[0] $palette.text }) -join '  '
+    }
+    if ($plain.Length + 2 -gt $rowWidth) { return '' }
     $status = "$count selected"
     if ($total -gt $view) { $status += "  ·  $($top + 1)-$($top + $view) of $total" }
     $gap = $rowWidth - 2 - $plain.Length - $status.Length
@@ -208,17 +214,40 @@ function Show-Picker($items, [bool[]]$checked, [int]$view) {
     }
 }
 
+# ---------------------------------------------------------------- Banner
+# Shown before the sessions are read, so the command answers at once
+$bannerShown = $consoleWidth -ge 70 -and $consoleHeight -ge 24
+Write-Host ''
+if ($bannerShown) { Write-Banner }
+else { Write-Ansi ('  ' + (Paint 'CLAZARUS' $palette.accent) + '  ' + (Paint 'rise and resume' $palette.dim)) }
+Write-Host ''
+$bannerLines = if ($bannerShown) { 9 } else { 3 }
+
+# One status line, rewritten in place, then erased before the header takes its place
+$showStatus = -not [Console]::IsOutputRedirected
+function Write-Status($text) {
+    if (-not $showStatus) { return }
+    # Never wider than the console: a wrapped status line would no longer be rewritten in place
+    $w = [math]::Max(0, $rowWidth - 2)
+    Write-Ansi ("`r  " + (Paint (Cut $text $w).PadRight([math]::Min(40, $w)) $palette.dim)) -NoNewline
+}
+function Clear-Status { if ($showStatus) { Write-Host ("`r" + (' ' * $rowWidth) + "`r") -NoNewline } }
+
 # ---------------------------------------------------------------- Collect
+Write-Status 'reading sessions...'
 $live = @{}
 foreach ($s in Get-LiveSessions) { $live[$s.sessionId] = $s }
 
 $since = (Get-Date).AddDays(-$Days)
 # Only transcripts at the root of each project (subfolders hold subagent transcripts)
-$files = Get-ChildItem (Join-Path $claudeDir 'projects') -Directory | ForEach-Object {
+$files = @(Get-ChildItem (Join-Path $claudeDir 'projects') -Directory | ForEach-Object {
     Get-ChildItem $_.FullName -File -Filter *.jsonl
-} | Where-Object { $_.LastWriteTime -ge $since }
+} | Where-Object { $_.LastWriteTime -ge $since })
 
+$read = 0
 $sessions = foreach ($f in $files) {
+    $read++
+    Write-Status "reading sessions  $read/$($files.Count)"
     $cwd = $null; $entry = $null
     foreach ($line in (Get-Content $f.FullName -TotalCount 50 -Encoding UTF8)) {
         if ($line -notmatch '"cwd"') { continue }
@@ -267,10 +296,11 @@ if ($reference) {
 # ---------------------------------------------------------------- Self-update
 if ($updateCheck) {
     try {
+        if (-not $updateHandle.IsCompleted) { Write-Status 'checking for updates...' }
         $latest = if ($updateHandle.AsyncWaitHandle.WaitOne(3000)) { @($updateCheck.EndInvoke($updateHandle))[0] }
         $current = (Get-Content $versionFile -Raw).Trim()
         if ($latest -and $latest -ne $current) {
-            Write-Host "  Updating Clazarus to $($latest.Substring(0, 7))..." -ForegroundColor DarkGray
+            Write-Status "updating Clazarus to $($latest.Substring(0, 7))..."
             $ProgressPreference = 'SilentlyContinue'
             # Pinned to the commit, so a stale raw.githubusercontent.com cache cannot serve an older file
             $download = "$PSCommandPath.download"
@@ -278,6 +308,12 @@ if ($updateCheck) {
                 -OutFile $download -UseBasicParsing -TimeoutSec 10
             Move-Item $download $PSCommandPath -Force
             Set-Content $versionFile $latest -Encoding ASCII
+            # The new version draws its own banner: erase this one first
+            Clear-Status
+            if ($vt) {
+                [Console]::SetCursorPosition(0, [math]::Max(0, [Console]::CursorTop - $bannerLines))
+                Write-Host "$esc[J" -NoNewline
+            }
             $PSBoundParameters['NoUpdate'] = $true
             & $PSCommandPath @PSBoundParameters
             return
@@ -290,12 +326,7 @@ if ($updateCheck) {
 }
 
 # ---------------------------------------------------------------- Header
-# The full banner only when the console has room for it and for a useful list
-$bannerShown = $consoleWidth -ge 70 -and $consoleHeight -ge 24
-Write-Host ''
-if ($bannerShown) { Write-Banner }
-else { Write-Ansi ('  ' + (Paint 'CLAZARUS' $palette.accent) + '  ' + (Paint 'rise and resume' $palette.dim)) }
-Write-Host ''
+Clear-Status
 Write-Ansi ('  ' + (Paint 'last boot  ' $palette.dim) + (Paint ('{0:dd.MM.yyyy HH:mm}' -f $boot) $palette.text))
 if ($reference) {
     Write-Ansi ('  ' + (Paint 'window     ' $palette.dim) +
