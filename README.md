@@ -49,10 +49,16 @@ Without installing: `powershell -ExecutionPolicy Bypass -File .\Restore-ClaudeSe
 | Key | Action |
 | --- | --- |
 | ↑ / ↓, PgUp / PgDn, Home / End | Move |
-| Space | Toggle the current session |
-| A | Select all / none |
-| Enter | Resurrect the selected sessions |
+| Space | Tick / untick the current session |
+| A | Tick all / none |
+| Enter | Resurrect only the highlighted session |
+| R | Resurrect all the ticked sessions |
+| D | Mark the highlighted session for deletion (red `✕`); press again to unmark |
+| X | Delete the marked sessions, after a `y/N` confirmation |
 | Esc / Q | Quit |
+
+Deleting removes the session's transcript (and its subagent folder) from
+`~/.claude/projects`, so it is gone from this machine for good.
 
 Options:
 

@@ -8,7 +8,9 @@
     activity falls within -Hours hours of the most recent one before boot: the group that was
     running at shutdown, however long the machine stayed off.
 
-    Arrows: move   Space: toggle   A: all/none   Enter: resurrect   Esc: quit
+    Arrows: move   Space: tick   A: all/none   Enter: resurrect the highlighted session
+    R: resurrect all ticked   D: mark for deletion   X: delete the marked ones (after confirmation)
+    Esc: quit
 
 .EXAMPLE
     .\Restore-ClaudeSessions.ps1
@@ -66,6 +68,7 @@ $palette = @{
     selected = 110, 200, 140   # green: chosen, not a warning
     cursor   = 140, 175, 255
     cursorBg = 38, 46, 68
+    doomed   = 225, 105, 105   # red: marked for deletion
 }
 
 function Fg([int[]]$rgb) { "$esc[38;2;$($rgb[0]);$($rgb[1]);$($rgb[2])m" }
@@ -140,8 +143,9 @@ $rowWidth = $consoleWidth - 1
 $titleWidth = [math]::Max(12, [math]::Min(40, [int](($consoleWidth - 23) / 2)))
 
 # Row layout: pointer, mark, time, title, folder
-function Format-Row($s, [bool]$isChecked, [bool]$isCursor) {
-    if ($isChecked) { $mark = '●'; $markColor = $palette.selected; $titleColor = $palette.text }
+function Format-Row($s, [bool]$isChecked, [bool]$isCursor, [bool]$isDoomed = $false) {
+    if ($isDoomed)  { $mark = '✕'; $markColor = $palette.doomed;   $titleColor = $palette.doomed }
+    elseif ($isChecked) { $mark = '●'; $markColor = $palette.selected; $titleColor = $palette.text }
     else            { $mark = '○'; $markColor = $palette.dim;      $titleColor = $palette.soft }
     $pointer = if ($isCursor) { '►' } else { ' ' }
     $bg = if ($isCursor) { Bg $palette.cursorBg } else { '' }
@@ -167,8 +171,9 @@ function Write-ColumnHeader {
     Write-Ansi (Paint ('─' * $rowWidth) $palette.dim)
 }
 
-function Format-Footer($count, $top, $view, $total) {
-    $hints = @(('↑↓', 'move'), ('space', 'toggle'), ('a', 'all/none'), ('enter', 'resurrect'), ('esc', 'quit'))
+function Format-Footer($count, $doomedCount, $top, $view, $total) {
+    $hints = @(('↑↓', 'move'), ('space', 'tick'), ('a', 'all/none'), ('enter', 'resume this'), ('r', 'resume ticked'),
+        ('d', 'mark delete'), ('x', 'delete marked'), ('esc', 'quit'))
     $plain = ($hints | ForEach-Object { "$($_[0]) $($_[1])" }) -join '   '
     $colored = ($hints | ForEach-Object { "$(Paint $_[0] $palette.text) $(Paint $_[1] $palette.dim)" }) -join '   '
     # Narrow console: keys only, so the footer never wraps and breaks the redraw
@@ -178,14 +183,29 @@ function Format-Footer($count, $top, $view, $total) {
     }
     if ($plain.Length + 2 -gt $rowWidth) { return '' }
     $status = "$count selected"
+    if ($doomedCount) { $status += "  ·  $doomedCount to delete" }
     if ($total -gt $view) { $status += "  ·  $($top + 1)-$($top + $view) of $total" }
     $gap = $rowWidth - 2 - $plain.Length - $status.Length
     if ($gap -lt 2) { return '  ' + $colored }
     '  ' + $colored + (' ' * $gap) + (Paint $status $palette.selected)
 }
 
-# Keyboard checklist, two console lines per session; returns the indexes of the checked rows
-function Show-Picker($items, [bool[]]$checked, [int]$view) {
+# Deletes a session for good on this machine: its transcript and its subagent folder
+function Remove-Session($s) {
+    try {
+        Remove-Item -LiteralPath $s.FilePath -Force -ErrorAction Stop
+        $sub = [IO.Path]::ChangeExtension($s.FilePath, $null).TrimEnd('.')
+        if (Test-Path -LiteralPath $sub -PathType Container) { Remove-Item -LiteralPath $sub -Recurse -Force -ErrorAction SilentlyContinue }
+        $true
+    } catch { $false }
+}
+
+# Keyboard checklist, two console lines per session; returns the sessions to resurrect
+#   Enter: the highlighted one   R: all the ticked ones   D: mark for deletion   X: delete the marked ones
+function Show-Picker($sessionList, [bool[]]$tickedList, [int]$view) {
+    $items = [System.Collections.ArrayList]@($sessionList)
+    $checked = [System.Collections.ArrayList]@($tickedList)
+    $doomed = [System.Collections.ArrayList]@($sessionList | ForEach-Object { $false })
     $cursor = 0; $top = 0
     $listLines = $view * 2
     # Reserve the space first: if the console scrolls, the origin stays correct
@@ -199,15 +219,23 @@ function Show-Picker($items, [bool[]]$checked, [int]$view) {
             for ($r = 0; $r -lt $view; $r++) {
                 $i = $top + $r
                 [Console]::SetCursorPosition(0, $origin + 2 * $r)
-                Write-Ansi (Format-Row $items[$i] $checked[$i] ($i -eq $cursor)) -NoNewline
-                [Console]::SetCursorPosition(0, $origin + 2 * $r + 1)
-                Write-Ansi (Format-Summary $items[$i] ($i -eq $cursor)) -NoNewline
+                if ($i -lt $items.Count) {
+                    Write-Ansi (Format-Row $items[$i] $checked[$i] ($i -eq $cursor) $doomed[$i]) -NoNewline
+                    [Console]::SetCursorPosition(0, $origin + 2 * $r + 1)
+                    Write-Ansi (Format-Summary $items[$i] ($i -eq $cursor)) -NoNewline
+                } else {
+                    # Past the end (after a deletion): blank lines
+                    Write-Host (' ' * $rowWidth) -NoNewline
+                    [Console]::SetCursorPosition(0, $origin + 2 * $r + 1)
+                    Write-Host (' ' * $rowWidth) -NoNewline
+                }
             }
             [Console]::SetCursorPosition(0, $origin + $listLines)
             Write-Ansi (Paint ('─' * $rowWidth) $palette.dim) -NoNewline
             [Console]::SetCursorPosition(0, $origin + $listLines + 1)
             $count = @($checked | Where-Object { $_ }).Count
-            Write-Ansi (Format-Footer $count $top $view $items.Count) -NoNewline
+            $doomedCount = @($doomed | Where-Object { $_ }).Count
+            Write-Ansi (Format-Footer $count $doomedCount $top $view $items.Count) -NoNewline
 
             $key = [Console]::ReadKey($true).Key.ToString()
             switch ($key) {
@@ -217,12 +245,43 @@ function Show-Picker($items, [bool[]]$checked, [int]$view) {
                 'PageDown'  { $cursor = [math]::Min($items.Count - 1, $cursor + $view) }
                 'Home'      { $cursor = 0 }
                 'End'       { $cursor = $items.Count - 1 }
-                'Spacebar'  { $checked[$cursor] = -not $checked[$cursor] }
+                'Spacebar'  {
+                    $checked[$cursor] = -not $checked[$cursor]
+                    if ($checked[$cursor]) { $doomed[$cursor] = $false }
+                }
                 'A' {
                     $value = -not ($checked -contains $true)
-                    for ($j = 0; $j -lt $items.Count; $j++) { $checked[$j] = $value }
+                    for ($j = 0; $j -lt $items.Count; $j++) { $checked[$j] = $value -and -not $doomed[$j] }
                 }
-                'Enter'  { return @(for ($j = 0; $j -lt $items.Count; $j++) { if ($checked[$j]) { $j } }) }
+                'D' {
+                    $doomed[$cursor] = -not $doomed[$cursor]
+                    if ($doomed[$cursor]) { $checked[$cursor] = $false }
+                    if ($cursor -lt $items.Count - 1) { $cursor++ }
+                }
+                'X' {
+                    if (-not $doomedCount) { continue }
+                    [Console]::SetCursorPosition(0, $origin + $listLines + 1)
+                    $question = "  Delete $doomedCount session(s) from this machine for good?  [y/N]"
+                    Write-Ansi (Paint $question.PadRight($rowWidth) $palette.doomed) -NoNewline
+                    $answer = [Console]::ReadKey($true).Key.ToString()
+                    [Console]::SetCursorPosition(0, $origin + $listLines + 1)
+                    Write-Host (' ' * $rowWidth) -NoNewline
+                    if ($answer -ne 'Y') { continue }
+                    for ($j = $items.Count - 1; $j -ge 0; $j--) {
+                        if ($doomed[$j] -and (Remove-Session $items[$j])) {
+                            $items.RemoveAt($j); $checked.RemoveAt($j); $doomed.RemoveAt($j)
+                        }
+                    }
+                    if (-not $items.Count) { return @() }
+                    $cursor = [math]::Min($cursor, $items.Count - 1)
+                    $top = [math]::Max(0, [math]::Min($top, $items.Count - $view))
+                }
+                'Enter' {
+                    if (-not $doomed[$cursor]) { return @($items[$cursor]) }
+                }
+                'R' {
+                    if ($count) { return @(for ($j = 0; $j -lt $items.Count; $j++) { if ($checked[$j]) { $items[$j] } }) }
+                }
                 'Escape' { return @() }
                 'Q'      { return @() }
             }
@@ -311,6 +370,7 @@ $sessions = foreach ($f in $files) {
         Summary      = $summary
         Directory    = $cwd
         SessionId    = $f.BaseName
+        FilePath     = $f.FullName
         Live         = $isLive
         InGroup      = $false
     }
@@ -411,7 +471,7 @@ $headerLines = $(if ($bannerShown) { 14 } else { 8 }) + $runningLines
 # Sessions that fit, at two lines each
 $view = [math]::Min($sessions.Count, [math]::Max(3, [math]::Floor(($consoleHeight - $headerLines - 3) / 2)))
 $checked = [bool[]]@($sessions | ForEach-Object { $_.InGroup })
-$chosen = @(Show-Picker $sessions $checked $view | ForEach-Object { $sessions[$_] })
+$chosen = @(Show-Picker $sessions $checked $view)
 Write-Host ''
 if (-not $chosen) { Write-Ansi ('  ' + (Paint 'Nothing to resurrect.' $palette.soft)); return }
 
