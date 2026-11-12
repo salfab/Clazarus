@@ -75,9 +75,12 @@ Options:
 - **Sessions** come from the transcripts Claude Code keeps in
   `~/.claude/projects/<project>/<session-id>.jsonl`, which stay there after a session closes. The
   working directory and the title (your `/rename`, else the generated one) are read from them.
-- **Pre-selection**: the reference is the most recent session written before the last boot.
-  Every session whose last activity falls within `-Hours` before it is pre-selected. This works
-  however long the machine stayed off.
+- **Pre-selection**: every session whose last activity falls within `-Hours` before a reference
+  is pre-selected. When no session is running yet, the reference is the last shutdown, read from
+  the registry (`HKLM\SYSTEM\CurrentControlSet\Control\Windows\ShutdownTime`, the same instant
+  as the Kernel-General event 13 in the System log). Once some sessions are running again, it is
+  the most recent closed session, since you have started reopening them. Pre-selected sessions
+  come first in the list, then the others, newest first.
 - **Live sessions**: Claude Code keeps a registry of running sessions in `~/.claude/sessions/`.
   Sessions still running are only listed on the `running` line, never offered, and are ignored
   when computing the window, so a session you already reopened never shifts it.
@@ -99,4 +102,6 @@ Options:
 
 - A session left idle for more than `-Hours` before the shutdown is not pre-selected. It is still
   listed; select it by hand.
+- Sleep and hibernation are not shutdowns: they leave the shutdown time unchanged. That matters
+  little, since sleeping does not end the sessions.
 - It relies on Claude Code's local file layout, which is not a public API and may change.

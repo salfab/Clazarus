@@ -4,9 +4,9 @@
 
 .DESCRIPTION
     Claude Code keeps every session in ~/.claude/projects/<project>/<session-id>.jsonl, even
-    after it is closed. This script lists them newest first and pre-selects those whose last
-    activity falls within -Hours hours of the most recent one before boot: the group that was
-    running at shutdown, however long the machine stayed off.
+    after it is closed. This script pre-selects those whose last activity falls within -Hours
+    hours before the last shutdown (or, once some sessions are running again, before the most
+    recent closed session), lists them first, then the others, newest first.
 
     Arrows: move   Space: tick   A: all/none   Enter: resurrect the highlighted session
     R: resurrect all ticked   D: mark for deletion   X: delete the marked ones (after confirmation)
@@ -18,7 +18,7 @@
     .\Restore-ClaudeSessions.ps1 -ListOnly
 #>
 param(
-    # Width of the pre-selected group, measured back from the most recent session
+    # Width of the pre-selected window, measured back from the last shutdown (or last closed session)
     [double]$Hours = 5,
     # Sessions shown: last activity less than N days ago
     [int]$Days = 30,
@@ -46,11 +46,12 @@ if (-not $NoUpdate -and (Test-Path $versionFile)) {
 
 $claudeDir   = Join-Path $env:USERPROFILE '.claude'
 $registryDir = Join-Path $claudeDir 'sessions'
-# Boot time from the millisecond tick count, instantly (WMI takes over a second for the same value).
-# The 32-bit count wraps every 49.7 days; Clazarus runs right after a reboot, far from that.
-$uptimeMs = [long][Environment]::TickCount
-if ($uptimeMs -lt 0) { $uptimeMs += 4294967296 }
-$boot = (Get-Date).AddMilliseconds(-$uptimeMs)
+# Last shutdown: Windows writes it to the registry as a FILETIME, the same instant as the
+# Kernel-General event 13 in the System log, but read at once (Get-WinEvent takes over a second)
+$shutdown = try {
+    $raw = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Windows' -ErrorAction Stop).ShutdownTime
+    [DateTime]::FromFileTime([BitConverter]::ToInt64($raw, 0))
+} catch { $null }
 
 # ---------------------------------------------------------------- Styling
 # 24-bit ANSI colors; stripped when the console cannot render escape sequences
@@ -377,17 +378,26 @@ $sessions = foreach ($f in $files) {
 }
 $sessions = @($sessions | Sort-Object LastActivity -Descending)
 
-# Reference = the most recent closed session from before boot (else the most recent closed one):
-# a session opened then closed again after the reboot does not shift the group
+# End of the pre-selected window:
+#   no session running yet -> the last shutdown, which is when the sessions were cut off
+#   some already running   -> the most recent closed session: the user has started reopening
+#                             their sessions, and the ones left are those just before it
 $closed = @($sessions | Where-Object { -not $_.Live })
-$beforeBoot = @($closed | Where-Object { $_.LastActivity -lt $boot })
-$reference = if ($beforeBoot) { $beforeBoot[0] } elseif ($closed) { $closed[0] }
+$hasLive = [bool]($sessions | Where-Object Live)
+$reference = $null; $referenceLabel = $null
+if ($hasLive -or -not $shutdown) {
+    if ($closed) { $reference = $closed[0].LastActivity; $referenceLabel = 'the last closed session' }
+} else {
+    $reference = $shutdown; $referenceLabel = 'the last shutdown'
+}
 if ($reference) {
-    $limit = $reference.LastActivity.AddHours(-$Hours)
+    $limit = $reference.AddHours(-$Hours)
     foreach ($s in $closed) {
-        if ($s.LastActivity -le $reference.LastActivity -and $s.LastActivity -ge $limit) { $s.InGroup = $true }
+        if ($s.LastActivity -le $reference -and $s.LastActivity -ge $limit) { $s.InGroup = $true }
     }
 }
+# Pre-selected sessions first, then newest first
+$sessions = @($sessions | Sort-Object @{ Expression = 'InGroup'; Descending = $true }, @{ Expression = 'LastActivity'; Descending = $true })
 
 # ---------------------------------------------------------------- Self-update
 if ($updateCheck) {
@@ -423,11 +433,12 @@ if ($updateCheck) {
 
 # ---------------------------------------------------------------- Header
 Clear-Status
-Write-Ansi ('  ' + (Paint 'last boot  ' $palette.dim) + (Paint ('{0:dd.MM.yyyy HH:mm}' -f $boot) $palette.text))
+$shutdownText = if ($shutdown) { '{0:dd.MM.yyyy HH:mm}' -f $shutdown } else { 'unknown' }
+Write-Ansi ('  ' + (Paint 'shutdown   ' $palette.dim) + (Paint $shutdownText $palette.text))
 if ($reference) {
     Write-Ansi ('  ' + (Paint 'window     ' $palette.dim) +
-        (Paint ('{0:dd.MM HH:mm} → {1:dd.MM HH:mm}' -f $limit, $reference.LastActivity) $palette.text) +
-        (Paint ("  ($Hours h before the last session, pre-selected)") $palette.dim))
+        (Paint ('{0:dd.MM HH:mm} → {1:dd.MM HH:mm}' -f $limit, $reference) $palette.text) +
+        (Paint ("  ($Hours h before $referenceLabel, pre-selected)") $palette.dim))
 }
 
 # Running sessions are information, not choices: one dim line, wrapped, outside the list
