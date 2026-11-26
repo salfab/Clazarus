@@ -322,6 +322,22 @@ function Write-Status($text) {
 }
 function Clear-Status { if ($showStatus) { Write-Host ("`r" + (' ' * $rowWidth) + "`r") -NoNewline } }
 
+# ---------------------------------------------------------------- Self-update
+# Takes GitHub's answer, waiting at most $waitMs; sets $updateTo when main has moved
+$updateDecided = -not $updateCheck
+$updateTo = $null
+function Resolve-Update([int]$waitMs) {
+    $script:updateDecided = $true
+    try {
+        if (-not $updateHandle.AsyncWaitHandle.WaitOne($waitMs)) { return }
+        $latest = @($updateCheck.EndInvoke($updateHandle))[0]
+        $current = (Get-Content $versionFile -Raw).Trim()
+        if ($latest -and $latest -ne $current) { $script:updateTo = $latest }
+    } catch {
+        # Offline or GitHub unreachable: run the installed version as it is
+    }
+}
+
 # ---------------------------------------------------------------- Collect
 Write-Status 'reading sessions...'
 $live = @{}
@@ -335,6 +351,11 @@ $files = @(Get-ChildItem (Join-Path $claudeDir 'projects') -Directory | ForEach-
 
 $read = 0
 $sessions = foreach ($f in $files) {
+    # As soon as GitHub answers with a newer version, stop reading: the new version reads them again
+    if (-not $updateDecided -and $updateHandle.IsCompleted) {
+        Resolve-Update 0
+        if ($updateTo) { break }
+    }
     $read++
     Write-Status "reading sessions  $read/$($files.Count)"
     $cwd = $null; $entry = $null
@@ -385,6 +406,38 @@ $sessions = foreach ($f in $files) {
         InGroup      = $false
     }
 }
+
+# Read before GitHub answered: wait for it, a little
+if (-not $updateDecided) {
+    if (-not $updateHandle.IsCompleted) { Write-Status 'checking for updates...' }
+    Resolve-Update 3000
+}
+if ($updateCheck) { $updateCheck.Dispose() }
+if ($updateTo) {
+    Write-Status "updating Clazarus to $($updateTo.Substring(0, 7))..."
+    try {
+        $ProgressPreference = 'SilentlyContinue'
+        # Pinned to the commit, so a stale raw.githubusercontent.com cache cannot serve an older file
+        $download = "$PSCommandPath.download"
+        Invoke-WebRequest "https://raw.githubusercontent.com/salfab/Clazarus/$updateTo/Restore-ClaudeSessions.ps1" `
+            -OutFile $download -UseBasicParsing -TimeoutSec 10
+        Move-Item $download $PSCommandPath -Force
+        Set-Content $versionFile $updateTo -Encoding ASCII
+    } catch {
+        # Download failed: the installed copy is unchanged, and relaunched below all the same,
+        # since the reading stopped early
+    }
+    # The relaunched script draws its own banner: erase this one first
+    Clear-Status
+    if ($vt) {
+        [Console]::SetCursorPosition(0, [math]::Max(0, [Console]::CursorTop - $bannerLines))
+        Write-Host "$esc[J" -NoNewline
+    }
+    $PSBoundParameters['NoUpdate'] = $true
+    & $PSCommandPath @PSBoundParameters
+    return
+}
+
 $sessions = @($sessions | Sort-Object LastActivity -Descending)
 
 # End of the pre-selected window:
@@ -407,38 +460,6 @@ if ($reference) {
 }
 # Pre-selected sessions first, then newest first
 $sessions = @($sessions | Sort-Object @{ Expression = 'InGroup'; Descending = $true }, @{ Expression = 'LastActivity'; Descending = $true })
-
-# ---------------------------------------------------------------- Self-update
-if ($updateCheck) {
-    try {
-        if (-not $updateHandle.IsCompleted) { Write-Status 'checking for updates...' }
-        $latest = if ($updateHandle.AsyncWaitHandle.WaitOne(3000)) { @($updateCheck.EndInvoke($updateHandle))[0] }
-        $current = (Get-Content $versionFile -Raw).Trim()
-        if ($latest -and $latest -ne $current) {
-            Write-Status "updating Clazarus to $($latest.Substring(0, 7))..."
-            $ProgressPreference = 'SilentlyContinue'
-            # Pinned to the commit, so a stale raw.githubusercontent.com cache cannot serve an older file
-            $download = "$PSCommandPath.download"
-            Invoke-WebRequest "https://raw.githubusercontent.com/salfab/Clazarus/$latest/Restore-ClaudeSessions.ps1" `
-                -OutFile $download -UseBasicParsing -TimeoutSec 10
-            Move-Item $download $PSCommandPath -Force
-            Set-Content $versionFile $latest -Encoding ASCII
-            # The new version draws its own banner: erase this one first
-            Clear-Status
-            if ($vt) {
-                [Console]::SetCursorPosition(0, [math]::Max(0, [Console]::CursorTop - $bannerLines))
-                Write-Host "$esc[J" -NoNewline
-            }
-            $PSBoundParameters['NoUpdate'] = $true
-            & $PSCommandPath @PSBoundParameters
-            return
-        }
-    } catch {
-        # Offline or GitHub unreachable: run the installed version as it is
-    } finally {
-        $updateCheck.Dispose()
-    }
-}
 
 # ---------------------------------------------------------------- Header
 Clear-Status
