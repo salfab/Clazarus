@@ -3,8 +3,9 @@
     Installs Clazarus as a global "clazarus" command (or removes it with -Uninstall).
 
 .DESCRIPTION
-    Copies Restore-ClaudeSessions.ps1 to -InstallDir, writes a clazarus.cmd shim next to it and
-    adds that folder to the user PATH. The shim works from PowerShell, cmd and Windows Terminal.
+    Copies Restore-ClaudeSessions.ps1 to -InstallDir, writes shims next to it and adds that folder
+    to the user PATH. clazarus.cmd serves PowerShell, cmd and Windows Terminal; "clazarus", a shell
+    script without extension, serves Git Bash, which does not run .cmd files by bare name.
     Run from a clone, it installs the local script; run through "irm ... | iex", it downloads it
     from GitHub. The installed copy then updates itself whenever GitHub's main branch moves.
 
@@ -71,6 +72,10 @@ Set-Content (Join-Path $InstallDir 'clazarus.cmd') -Encoding ASCII -Value @"
 @echo off
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0$scriptName" %*
 "@
+
+# Git Bash shim: no extension, LF line endings, no BOM. cygpath turns the install folder into a Windows path.
+$bashShim = "#!/bin/sh`nexec powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"`$(cygpath -w `"`$(dirname `"`$0`")`")/$scriptName`" `"`$@`"`n"
+[IO.File]::WriteAllText((Join-Path $InstallDir 'clazarus'), $bashShim, (New-Object Text.UTF8Encoding $false))
 
 if (-not $isOnPath) { Set-UserPath ($entries + $InstallDir) }
 # The current shell does not reread PATH from the registry
