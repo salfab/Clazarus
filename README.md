@@ -68,6 +68,7 @@ Options:
 | `-Hours` | `5` | Width of the pre-selected window |
 | `-Days` | `30` | Only list sessions active in the last N days |
 | `-IncludeDesktop` | off | Also list Claude desktop app sessions (they already stay in the app's sidebar) |
+| `-NoWsl` | off | Do not look for sessions inside WSL distributions |
 | `-ListOnly` | off | Print the list without the interactive picker |
 | `-NoUpdate` | off | Skip the update check of the installed copy |
 
@@ -91,8 +92,15 @@ Options:
 - **Shell**: each tab starts the default profile of Windows Terminal (read from its
   `settings.json`) and runs `claude` from that shell, so `claude` gets your usual environment and
   the tab stays open on the shell's prompt when `claude` exits. Windows PowerShell, PowerShell 7,
-  cmd and Git Bash are supported; for anything else (WSL, for instance) or when the settings
-  cannot be read, Windows PowerShell is used. Git Bash is looked up from `git.exe` on the `PATH`.
+  cmd and Git Bash are supported; for anything else or when the settings cannot be read, Windows
+  PowerShell is used. Git Bash is looked up from `git.exe` on the `PATH`.
+- **WSL**: a `claude` running inside a WSL distribution keeps its sessions in that distribution's
+  home folder, not in your Windows profile. Clazarus reads them as `\\wsl$\<distro>\home\<user>\.claude`
+  (and `root`) for every distribution `wsl -l` lists, except Docker's own, and shows them with the
+  distribution in front of the folder (`Ubuntu:/home/you/project`). A WSL session is reopened
+  as a tab running `wsl.exe -d <distro> --cd <folder>`, where a bash login shell starts `claude`
+  and then leaves you on your shell, whatever the default profile of Windows Terminal is. Whether
+  a WSL session is still running is read from the distribution's `/proc`.
 - **Remote Control**: every resurrected session starts with `--remote-control "<title>"`, so it
   shows up under its own name in the Claude app. Whether a session had Remote Control before the
   reboot is not recorded anywhere that survives it, so it is enabled for all of them.
@@ -108,6 +116,10 @@ Options:
 
 - A session left idle for more than `-Hours` before the shutdown is not pre-selected. It is still
   listed; select it by hand.
+- Reading WSL sessions starts the distributions that are stopped (Windows does it when their files
+  are opened), which takes a moment; `-NoWsl` skips them.
+- In WSL, `claude` must be found by a bash login shell (`bash -lic`), which is where the installer
+  of Claude Code puts it. If you only set its `PATH` in `.zshrc`, the tab will open without it.
 - Sleep and hibernation are not shutdowns: they leave the shutdown time unchanged. That matters
   little, since sleeping does not end the sessions.
 - It relies on Claude Code's local file layout, which is not a public API and may change.
