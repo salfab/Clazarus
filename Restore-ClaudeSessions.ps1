@@ -113,10 +113,12 @@ function Write-Banner {
         }
         [void]$out.Append($reset).Append("`n")
     }
-    Write-Ansi $out.ToString().TrimEnd("`n")
+    # The running commit sits right of the last character of the logo
+    $logo = $out.ToString().TrimEnd("`n")
+    if ($commit) { $logo += '  ' + (Paint "v. $commit" $palette.dim) }
+    Write-Ansi $logo
     $tagline = 'rise and resume  ·  Claude Code session resurrector'
     Write-Ansi ((' ' * [math]::Max(2, $len + 2 - $tagline.Length)) + (Paint $tagline $palette.dim))
-    if ($commitLabel) { Write-Ansi ((' ' * [math]::Max(2, $len + 2 - $commitLabel.Length)) + (Paint $commitLabel $palette.dim)) }
 }
 
 # ---------------------------------------------------------------- Sessions
@@ -303,13 +305,12 @@ $bannerShown = $consoleWidth -ge 70 -and $consoleHeight -ge 24
 $commit = $null
 if (Test-Path $versionFile) { $v = (Get-Content $versionFile -Raw).Trim(); if ($v -match '^[0-9a-f]{40}$') { $commit = $v.Substring(0, 7) } }
 if (-not $commit) { $commit = try { (git -C $PSScriptRoot rev-parse --short HEAD 2>$null) } catch { $null } }
-$commitLabel = if ($commit) { "commit $commit" } else { '' }
 
 Write-Host ''
 if ($bannerShown) { Write-Banner }
-else { Write-Ansi ('  ' + (Paint 'CLAZARUS' $palette.accent) + '  ' + (Paint 'rise and resume' $palette.dim) + $(if ($commit) { '  ' + (Paint $commit $palette.dim) })) }
+else { Write-Ansi ('  ' + (Paint 'CLAZARUS' $palette.accent) + '  ' + (Paint 'rise and resume' $palette.dim) + $(if ($commit) { '  ' + (Paint "v. $commit" $palette.dim) })) }
 Write-Host ''
-$bannerLines = if ($bannerShown) { 9 + $(if ($commitLabel) { 1 } else { 0 }) } else { 3 }
+$bannerLines = if ($bannerShown) { 9 } else { 3 }
 
 # One status line, rewritten in place, then erased before the header takes its place
 $showStatus = -not [Console]::IsOutputRedirected
@@ -486,7 +487,7 @@ if ($ListOnly -or [Console]::IsInputRedirected) {
     return
 }
 
-$headerLines = $(if ($bannerShown) { 14 + $(if ($commitLabel) { 1 } else { 0 }) } else { 8 }) + $runningLines
+$headerLines = $(if ($bannerShown) { 14 } else { 8 }) + $runningLines
 # Sessions that fit, at two lines each
 $view = [math]::Min($sessions.Count, [math]::Max(3, [math]::Floor(($consoleHeight - $headerLines - 3) / 2)))
 $checked = [bool[]]@($sessions | ForEach-Object { $_.InGroup })
