@@ -87,6 +87,11 @@ Options:
 - **Resurrection**: one `wt.exe` call opens every selected session as a tab. Run from Windows
   Terminal, the tabs go into the current window; otherwise into a new one. Without Windows
   Terminal, each session opens in its own PowerShell window.
+- **Shell**: each tab starts the default profile of Windows Terminal (read from its
+  `settings.json`) and runs `claude` from that shell, so `claude` gets your usual environment and
+  the tab stays open on the shell's prompt when `claude` exits. Windows PowerShell, PowerShell 7,
+  cmd and Git Bash are supported; for anything else (WSL, for instance) or when the settings
+  cannot be read, Windows PowerShell is used. Git Bash is looked up from `git.exe` on the `PATH`.
 - **Remote Control**: every resurrected session starts with `--remote-control "<title>"`, so it
   shows up under its own name in the Claude app. Whether a session had Remote Control before the
   reboot is not recorded anywhere that survives it, so it is enabled for all of them.

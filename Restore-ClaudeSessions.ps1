@@ -486,20 +486,124 @@ $chosen = @(Show-Picker $sessions $checked $view)
 Write-Host ''
 if (-not $chosen) { Write-Ansi ('  ' + (Paint 'Nothing to resurrect.' $palette.soft)); return }
 
+# ---------------------------------------------------------------- Shell
+# Windows Terminal's settings.json allows comments and trailing commas, which ConvertFrom-Json refuses:
+# drop them, leaving the strings untouched (a "//" inside a string is not a comment)
+function Read-JsonWithComments([string]$path) {
+    $raw = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+    $pattern = '"(?:\\.|[^"\\])*"|//[^\r\n]*|/\*[\s\S]*?\*/|,(?=\s*[}\]])'
+    [regex]::Replace($raw, $pattern, { param($m) if ($m.Value.StartsWith('"')) { $m.Value } else { '' } }) | ConvertFrom-Json
+}
+
+# Git Bash is a generated profile with no command line in settings.json: find bash.exe from git.exe
+function Find-GitBash {
+    $candidates = @()
+    $git = Get-Command git.exe -ErrorAction SilentlyContinue
+    if ($git) { $candidates += Join-Path (Split-Path (Split-Path $git.Source)) 'bin\bash.exe' }
+    $candidates += "$env:ProgramFiles\Git\bin\bash.exe", "${env:ProgramFiles(x86)}\Git\bin\bash.exe", "$env:LOCALAPPDATA\Programs\Git\bin\bash.exe"
+    $candidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+}
+
+# The default profile of Windows Terminal: Name, Kind (powershell, cmd, bash), Exe, and Guid
+# (null when the profile cannot be told). Anything unreadable or unknown, such as WSL, gives Windows PowerShell.
+function Get-TerminalShell {
+    $fallback = [pscustomobject]@{ Name = 'PowerShell'; Kind = 'powershell'; Exe = 'powershell.exe'; Guid = $null }
+    $builtin = @{
+        '{574e775e-4f2a-5b96-ac1e-a2962a402336}' = 'pwsh.exe'         # PowerShell 7
+        '{61c54bbd-c2c6-5271-96e7-009a87ff44bf}' = 'powershell.exe'   # Windows PowerShell, the default default
+        '{0caa0dad-35be-5f56-a8ff-afceeeaa6101}' = 'cmd.exe'
+        '{2ece5bfe-50ed-5f3a-ab87-5cd4baafed2b}' = 'bash.exe'         # Git Bash
+    }
+    $settingsPath = @(
+        "$env:LOCALAPPDATA\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json"
+        "$env:LOCALAPPDATA\Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json"
+        "$env:LOCALAPPDATA\Microsoft\Windows Terminal\settings.json"
+    ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if (-not $settingsPath) { return $fallback }
+    try {
+        $settings = Read-JsonWithComments $settingsPath
+        # defaultProfile is a GUID, or a profile name in recent versions
+        $default = if ($settings.defaultProfile) { $settings.defaultProfile } else { '{61c54bbd-c2c6-5271-96e7-009a87ff44bf}' }
+        $list = if ($settings.profiles.list) { $settings.profiles.list } else { $settings.profiles }
+        $prof = @($list) | Where-Object { $_.guid -eq $default -or $_.name -eq $default } | Select-Object -First 1
+        $guid = if ($prof -and $prof.guid) { $prof.guid } else { $default }
+        $name = if ($prof -and $prof.name) { $prof.name } else { $null }
+
+        $exe = $null
+        if ($prof -and $prof.commandline) {
+            $cmd = [Environment]::ExpandEnvironmentVariables($prof.commandline.Trim())
+            $exe = if ($cmd -match '^"([^"]+)"') { $Matches[1] }
+                   elseif ($cmd -match '^(.+?\.exe)(\s|$)') { $Matches[1] }
+                   else { ($cmd -split '\s+')[0] }
+        } elseif ($builtin.ContainsKey($guid)) { $exe = $builtin[$guid] }
+        elseif ($prof -and $prof.source -eq 'Git') { $exe = 'bash.exe' }
+        elseif ($prof -and $prof.source -eq 'Windows.Terminal.PowershellCore') { $exe = 'pwsh.exe' }
+        if (-not $exe) { return $fallback }
+
+        $kind = switch ([IO.Path]::GetFileNameWithoutExtension($exe).ToLowerInvariant()) {
+            { $_ -in 'pwsh', 'powershell' } { 'powershell' }
+            'cmd'  { 'cmd' }
+            'bash' { 'bash' }
+            default { $null }
+        }
+        if (-not $kind) { return $fallback }
+        # A bare "bash.exe" from a Git profile is not the WSL launcher of System32
+        if ($kind -eq 'bash' -and -not [IO.Path]::IsPathRooted($exe)) {
+            $exe = Find-GitBash
+            if (-not $exe) { return $fallback }
+        }
+        [pscustomobject]@{ Name = $(if ($name) { $name } else { [IO.Path]::GetFileNameWithoutExtension($exe) }); Kind = $kind; Exe = $exe; Guid = $guid }
+    } catch { $fallback }
+}
+
+# The part of the wt command line that starts the shell, which runs claude and stays open after it.
+# No ";" in the result: wt would read it as a command separator.
+function Get-ShellCommand($shell, $s, [string]$tabTitle) {
+    $id = $s.SessionId
+    switch ($shell.Kind) {
+        'cmd' {
+            # "%" would be expanded by cmd; the quotes are already out of the title
+            $t = $tabTitle -replace '%', ''
+            "`"$($shell.Exe)`" /k claude --resume $id --remote-control `"$t`""
+        }
+        'bash' {
+            # Single-quoted for bash, and the folder as a /c/... path. No -l on the final bash: the login
+            # profile would send it back to the home folder. "|| true" keeps the shell after a failed claude.
+            $t = $tabTitle -replace "'", "'\''"
+            $dir = ($s.Directory -replace '\\', '/') -replace "'", "'\''"
+            if ($dir -match '^([A-Za-z]):(.*)$') { $dir = '/' + $Matches[1].ToLowerInvariant() + $Matches[2] }
+            "`"$($shell.Exe)`" -l -i -c `"cd '$dir' && claude --resume $id --remote-control '$t' || true && exec bash -i`""
+        }
+        default {
+            # Encoded, so no quoting level can mangle the title
+            $t = $tabTitle -replace "'", "''"
+            $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes("claude --resume $id --remote-control '$t'"))
+            "`"$($shell.Exe)`" -NoExit -EncodedCommand $encoded"
+        }
+    }
+}
+
 # ---------------------------------------------------------------- Resurrect
 $chosen = @($chosen | Where-Object {
     if (Test-Path $_.Directory) { $true } else { Write-Warning "Folder not found, skipped: $($_.Directory)"; $false }
 })
 if (-not $chosen) { return }
 
+$shellName = 'PowerShell'
 if (Get-Command wt.exe -ErrorAction SilentlyContinue) {
+    # Each tab starts the default shell of Windows Terminal, which then runs claude: when claude
+    # exits, the tab stays open on that shell's prompt.
+    $shell = Get-TerminalShell
+    $shellName = $shell.Name
     # One wt call with every tab chained by ";": no race between windows.
     # Run from Windows Terminal: tabs go into the current window (-w 0), else into a new one.
     $window = if ($env:WT_SESSION) { '0' } else { 'new' }
     $tabs = foreach ($s in $chosen) {
         # wt reads ";" as a command separator, and the title is quoted
         $tabTitle = $s.Title -replace '"', "'" -replace ';', ','
-        "new-tab -d `"$($s.Directory)`" --title `"$tabTitle`" claude --resume $($s.SessionId) --remote-control `"$tabTitle`""
+        # The profile keeps the tab's look (colors, font) when the shell is the profile's own
+        $profileArg = if ($shell.Guid) { "-p `"$($shell.Guid)`" " } else { '' }
+        "new-tab $profileArg-d `"$($s.Directory)`" --title `"$tabTitle`" $(Get-ShellCommand $shell $s $tabTitle)"
     }
     Start-Process wt.exe -ArgumentList ("-w $window " + ($tabs -join ' ; '))
 } else {
@@ -508,7 +612,7 @@ if (Get-Command wt.exe -ErrorAction SilentlyContinue) {
         Start-Process powershell.exe -WorkingDirectory $s.Directory -ArgumentList '-NoExit', '-Command', "claude --resume $($s.SessionId) --remote-control '$rcName'"
     }
 }
-Write-Ansi ('  ' + (Paint "Resurrecting $($chosen.Count) session(s)" $palette.text))
+Write-Ansi ('  ' + (Paint "Resurrecting $($chosen.Count) session(s)" $palette.text) + (Paint "  in $shellName" $palette.dim))
 foreach ($s in $chosen) {
     Write-Ansi ('  ' + (Paint '► ' $palette.selected) + (Paint $s.Title $palette.text) + '  ' + (Paint $s.Directory $palette.dim))
 }
