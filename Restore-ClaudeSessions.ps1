@@ -24,6 +24,8 @@ param(
     [int]$Days = 30,
     # Also include desktop app sessions (they stay in the app's sidebar anyway)
     [switch]$IncludeDesktop,
+    # Do not look for sessions inside WSL distributions (reading them starts the distributions)
+    [switch]$NoWsl,
     # Print the list without the interactive picker
     [switch]$ListOnly,
     # Skip the update check of the installed copy
@@ -136,6 +138,41 @@ function Get-LiveSessions {
     }
 }
 
+# Claude Code config folders inside WSL, one per Linux user of each distribution, reached as \\wsl$\ paths.
+# Reading a stopped distribution starts it, hence -NoWsl.
+function Get-WslSources {
+    if ($NoWsl -or -not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) { return }
+    # wsl.exe prints UTF-16: the NUL characters left in the text are dropped. Names have no spaces, which
+    # also discards the messages printed when WSL has no distribution. Docker's own distributions are no user sessions.
+    $names = @(& wsl.exe -l -q 2>$null | ForEach-Object { ($_ -replace "`0", '').Trim() } |
+        Where-Object { $_ -match '^\S+$' -and $_ -notmatch '^docker-desktop' })
+    foreach ($name in $names) {
+        $root = "\\wsl`$\$name"
+        $homes = @("$root\root") + @(Get-ChildItem "$root\home" -Directory -ErrorAction SilentlyContinue | ForEach-Object FullName)
+        foreach ($homeDir in $homes) {
+            if (Test-Path -LiteralPath "$homeDir\.claude\projects") {
+                [pscustomobject]@{ Claude = "$homeDir\.claude"; Distro = $name; Root = $root }
+            }
+        }
+    }
+}
+
+# Same as Get-LiveSessions, for a WSL config folder: the registry holds Linux PIDs, checked in the distribution's /proc
+function Get-WslLiveSessions($source) {
+    $registry = Join-Path $source.Claude 'sessions'
+    # Without /proc nothing can be told: no session is taken for running
+    if (-not (Test-Path -LiteralPath $registry) -or -not (Test-Path -LiteralPath "$($source.Root)\proc\1")) { return }
+    foreach ($f in Get-ChildItem -LiteralPath $registry -Filter *.json -File) {
+        $j = try { Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $null }
+        if (-not $j -or -not $j.sessionId -or -not $j.pid) { continue }
+        if (-not (Test-Path -LiteralPath "$($source.Root)\proc\$($j.pid)")) { continue }
+        # The PID may have been reused since a crash: the process must be a claude
+        $cmdline = try { Get-Content -LiteralPath "$($source.Root)\proc\$($j.pid)\cmdline" -Raw -ErrorAction Stop } catch { $null }
+        if ($null -ne $cmdline -and $cmdline -notmatch 'claude') { continue }
+        $j
+    }
+}
+
 function Cut($text, $n) {
     if ($n -le 0) { '' } elseif ($text.Length -le $n) { $text } else { $text.Substring(0, $n - 1) + '~' }
 }
@@ -155,7 +192,7 @@ function Format-Row($s, [bool]$isChecked, [bool]$isCursor, [bool]$isDoomed = $fa
     $bg = if ($isCursor) { Bg $palette.cursorBg } else { '' }
     $dirWidth = $rowWidth - 19 - $titleWidth
     $title = (Cut $s.Title $titleWidth).PadRight($titleWidth)
-    $dir = (Cut $s.Directory $dirWidth).PadRight([math]::Max(0, $dirWidth))
+    $dir = (Cut $s.Place $dirWidth).PadRight([math]::Max(0, $dirWidth))
     # No reset inside the row, so the cursor background spans the whole line
     "$bg$(Fg $palette.cursor)$pointer $(Fg $markColor)$mark  $(Fg $palette.time)$('{0:dd.MM HH:mm}' -f $s.LastActivity)  " +
         "$(Fg $titleColor)$title $(Fg $palette.dim)$dir$reset"
@@ -342,15 +379,24 @@ function Resolve-Update([int]$waitMs) {
 Write-Status 'reading sessions...'
 $live = @{}
 foreach ($s in Get-LiveSessions) { $live[$s.sessionId] = $s }
+# Windows first, then every Claude Code config folder found in WSL
+$sources = @([pscustomobject]@{ Claude = $claudeDir; Distro = $null }) + @(Get-WslSources)
+foreach ($src in $sources | Where-Object Distro) {
+    foreach ($s in Get-WslLiveSessions $src) { $live[$s.sessionId] = $s }
+}
 
 $since = (Get-Date).AddDays(-$Days)
 # Only transcripts at the root of each project (subfolders hold subagent transcripts)
-$files = @(Get-ChildItem (Join-Path $claudeDir 'projects') -Directory | ForEach-Object {
-    Get-ChildItem $_.FullName -File -Filter *.jsonl
-} | Where-Object { $_.LastWriteTime -ge $since })
+$files = @(foreach ($src in $sources) {
+    $distro = $src.Distro
+    Get-ChildItem (Join-Path $src.Claude 'projects') -Directory | ForEach-Object {
+        Get-ChildItem $_.FullName -File -Filter *.jsonl
+    } | Where-Object { $_.LastWriteTime -ge $since } | ForEach-Object { [pscustomobject]@{ File = $_; Distro = $distro } }
+})
 
 $read = 0
-$sessions = foreach ($f in $files) {
+$sessions = foreach ($item in $files) {
+    $f = $item.File
     # As soon as GitHub answers with a newer version, stop reading: the new version reads them again
     if (-not $updateDecided -and $updateHandle.IsCompleted) {
         Resolve-Update 0
@@ -400,6 +446,8 @@ $sessions = foreach ($f in $files) {
         Title        = if ($title) { $title } else { '(untitled)' }
         Summary      = $summary
         Directory    = $cwd
+        Distro       = $item.Distro
+        Place        = if ($item.Distro) { "$($item.Distro):$cwd" } else { $cwd }
         SessionId    = $f.BaseName
         FilePath     = $f.FullName
         Live         = $isLive
@@ -613,9 +661,23 @@ function Get-ShellCommand($shell, $s, [string]$tabTitle) {
     }
 }
 
+# The wsl.exe arguments that start claude in the session's folder inside its distribution. The shell is bash,
+# started as a login shell like a terminal would, so claude must be on its PATH; the user's shell then takes over.
+# No ";" in the result: wt would read it as a command separator.
+function Get-WslArguments($s, [string]$tabTitle) {
+    $t = $tabTitle -replace "'", "'\''"
+    $inner = "claude --resume $($s.SessionId) --remote-control '$t' || true && exec `$SHELL -i"
+    "-d `"$($s.Distro)`" --cd `"$($s.Directory)`" --exec bash -lic `"$inner`""
+}
+
+function Test-SessionFolder($s) {
+    if ($s.Distro) { Test-Path -LiteralPath ("\\wsl`$\$($s.Distro)" + ($s.Directory -replace '/', '\')) }
+    else { Test-Path $s.Directory }
+}
+
 # ---------------------------------------------------------------- Resurrect
 $chosen = @($chosen | Where-Object {
-    if (Test-Path $_.Directory) { $true } else { Write-Warning "Folder not found, skipped: $($_.Directory)"; $false }
+    if (Test-SessionFolder $_) { $true } else { Write-Warning "Folder not found, skipped: $($_.Place)"; $false }
 })
 if (-not $chosen) { return }
 
@@ -631,18 +693,27 @@ if (Get-Command wt.exe -ErrorAction SilentlyContinue) {
     $tabs = foreach ($s in $chosen) {
         # wt reads ";" as a command separator, and the title is quoted
         $tabTitle = $s.Title -replace '"', "'" -replace ';', ','
-        # The profile keeps the tab's look (colors, font) when the shell is the profile's own
-        $profileArg = if ($shell.Guid) { "-p `"$($shell.Guid)`" " } else { '' }
-        "new-tab $profileArg-d `"$($s.Directory)`" --title `"$tabTitle`" $(Get-ShellCommand $shell $s $tabTitle)"
+        if ($s.Distro) {
+            "new-tab --title `"$tabTitle`" wsl.exe $(Get-WslArguments $s $tabTitle)"
+        } else {
+            # The profile keeps the tab's look (colors, font) when the shell is the profile's own
+            $profileArg = if ($shell.Guid) { "-p `"$($shell.Guid)`" " } else { '' }
+            "new-tab $profileArg-d `"$($s.Directory)`" --title `"$tabTitle`" $(Get-ShellCommand $shell $s $tabTitle)"
+        }
     }
     Start-Process wt.exe -ArgumentList ("-w $window " + ($tabs -join ' ; '))
 } else {
     foreach ($s in $chosen) {
+        if ($s.Distro) {
+            Start-Process wsl.exe -ArgumentList (Get-WslArguments $s ($s.Title -replace '"', "'" -replace ';', ','))
+            continue
+        }
         $rcName = $s.Title -replace "'", "''"
         Start-Process powershell.exe -WorkingDirectory $s.Directory -ArgumentList '-NoExit', '-Command', "claude --resume $($s.SessionId) --remote-control '$rcName'"
     }
 }
+if ($chosen | Where-Object Distro) { $shellName += ' / WSL' }
 Write-Ansi ('  ' + (Paint "Resurrecting $($chosen.Count) session(s)" $palette.text) + (Paint "  in $shellName" $palette.dim))
 foreach ($s in $chosen) {
-    Write-Ansi ('  ' + (Paint '► ' $palette.selected) + (Paint $s.Title $palette.text) + '  ' + (Paint $s.Directory $palette.dim))
+    Write-Ansi ('  ' + (Paint '► ' $palette.selected) + (Paint $s.Title $palette.text) + '  ' + (Paint $s.Place $palette.dim))
 }
