@@ -73,8 +73,15 @@ Set-Content (Join-Path $InstallDir 'clazarus.cmd') -Encoding ASCII -Value @"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0$scriptName" %*
 "@
 
-# Git Bash shim: no extension, LF line endings, no BOM. cygpath turns the install folder into a Windows path.
-$bashShim = "#!/bin/sh`nexec powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"`$(cygpath -w `"`$(dirname `"`$0`")`")/$scriptName`" `"`$@`"`n"
+# Shim for Git Bash and WSL: no extension, LF line endings, no BOM. powershell.exe needs a Windows path, which
+# cygpath (Git Bash) or wslpath (WSL, where the Windows PATH is visible) provides.
+$bashShim = @'
+#!/bin/sh
+dir=$(dirname "$0")
+if command -v cygpath >/dev/null 2>&1; then dir=$(cygpath -w "$dir"); else dir=$(wslpath -w "$dir"); fi
+exec powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$dir/__SCRIPT__" "$@"
+'@
+$bashShim = ($bashShim -replace "`r`n", "`n").Replace('__SCRIPT__', $scriptName) + "`n"
 [IO.File]::WriteAllText((Join-Path $InstallDir 'clazarus'), $bashShim, (New-Object Text.UTF8Encoding $false))
 
 if (-not $isOnPath) { Set-UserPath ($entries + $InstallDir) }

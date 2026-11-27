@@ -31,9 +31,9 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
 This copies the script to `%LOCALAPPDATA%\Programs\Clazarus`, adds a `clazarus` command there and
-puts that folder on your user `PATH`; `-Uninstall` removes it. The command works from PowerShell, cmd
-and Git Bash (a second shim, a shell script named `clazarus`, serves Git Bash). Terminals opened before the
-install need a restart to find the command.
+puts that folder on your user `PATH`; `-Uninstall` removes it. The command works from PowerShell, cmd,
+Git Bash and WSL (a second shim, a shell script named `clazarus`, serves both; WSL sees it through the
+Windows `PATH`). Terminals opened before the install need a restart to find the command.
 
 **Updates are automatic.** On every start, the installed copy compares the commit it was installed
 from with the head of `main` on GitHub. When `main` has moved, it downloads the new script and runs
