@@ -150,7 +150,8 @@ function Get-WslSources {
         $root = "\\wsl`$\$name"
         $homes = @("$root\root") + @(Get-ChildItem "$root\home" -Directory -ErrorAction SilentlyContinue | ForEach-Object FullName)
         foreach ($homeDir in $homes) {
-            if (Test-Path -LiteralPath "$homeDir\.claude\projects") {
+            # /root is not readable by a regular user: access denied just means "no sessions here"
+            if (Test-Path -LiteralPath "$homeDir\.claude\projects" -ErrorAction SilentlyContinue) {
                 [pscustomobject]@{ Claude = "$homeDir\.claude"; Distro = $name; Root = $root }
             }
         }
@@ -667,7 +668,8 @@ function Get-ShellCommand($shell, $s, [string]$tabTitle) {
 function Get-WslArguments($s, [string]$tabTitle) {
     $t = $tabTitle -replace "'", "'\''"
     $inner = "claude --resume $($s.SessionId) --remote-control '$t' || true && exec `$SHELL -i"
-    "-d `"$($s.Distro)`" --cd `"$($s.Directory)`" --exec bash -lic `"$inner`""
+    # wsl.exe does not strip quotes around the distribution name; names have no spaces (see Get-WslSources)
+    "-d $($s.Distro) --cd `"$($s.Directory)`" --exec bash -lic `"$inner`""
 }
 
 function Test-SessionFolder($s) {
