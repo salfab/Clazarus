@@ -634,15 +634,28 @@ function Get-TerminalShell {
     } catch { $fallback }
 }
 
+# Where claude is, as a full path: a tab opened by wt does not always inherit the PATH of this window (seen when
+# Clazarus runs from WSL), and a bare "claude" is then not found. The bare name stays as the last resort.
+function Get-ClaudePath {
+    $cmd = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cmd) { return $cmd.Source }
+    $native = Join-Path $env:USERPROFILE '.local\bin\claude.exe'
+    if (Test-Path -LiteralPath $native) { return $native }
+    'claude'
+}
+
 # The part of the wt command line that starts the shell, which runs claude and stays open after it.
 # No ";" in the result: wt would read it as a command separator.
 function Get-ShellCommand($shell, $s, [string]$tabTitle) {
     $id = $s.SessionId
+    $claude = Get-ClaudePath
     switch ($shell.Kind) {
         'cmd' {
             # "%" would be expanded by cmd; the quotes are already out of the title
             $t = $tabTitle -replace '%', ''
-            "`"$($shell.Exe)`" /k claude --resume $id --remote-control `"$t`""
+            # The whole command is wrapped in one more pair of quotes: cmd strips the first and last quote of a
+            # line that starts with one and holds more, which would break the quoted path of claude
+            "`"$($shell.Exe)`" /k `"`"$claude`" --resume $id --remote-control `"$t`"`""
         }
         'bash' {
             # Single-quoted for bash, and the folder as a /c/... path. No -l on the final bash: the login
@@ -655,7 +668,8 @@ function Get-ShellCommand($shell, $s, [string]$tabTitle) {
         default {
             # Encoded, so no quoting level can mangle the title
             $t = $tabTitle -replace "'", "''"
-            $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes("claude --resume $id --remote-control '$t'"))
+            $exe = $claude -replace "'", "''"
+            $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes("& '$exe' --resume $id --remote-control '$t'"))
             "`"$($shell.Exe)`" -NoExit -EncodedCommand $encoded"
         }
     }
