@@ -11,6 +11,14 @@ gone. Clazarus lists your recent sessions, pre-selects the ones that were runnin
 reboot, and reopens the ones you pick as tabs of a single Windows Terminal window, each in its
 own folder with `claude --resume` and Remote Control enabled.
 
+It works with the shell you already use:
+
+- **Windows PowerShell, PowerShell 7, cmd and Git Bash**: each session opens in the default shell of
+  Windows Terminal, and the tab stays open on that shell when `claude` exits.
+- **WSL**: sessions of `claude` running inside a WSL distribution are listed too (as
+  `Ubuntu:/home/you/project`) and reopened in their distribution.
+- The `clazarus` command runs from PowerShell, cmd, Git Bash and WSL.
+
 ![Clazarus picker in Windows Terminal](docs/screenshot.png)
 
 Under each session is a one-line summary: Claude's last "while you were away" recap, or your last
